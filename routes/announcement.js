@@ -1,4 +1,3 @@
-// routes/announcements.js
 const express = require('express');
 const router = express.Router();
 const db = require('../db');
@@ -23,39 +22,36 @@ const storage = multer.diskStorage({
 const upload = multer({ storage });
 
 // GET /api/announcements - Get all announcements (public)
-router.get('/', (req, res) => {
+router.get('/', async (req, res) => {
   const { ageFilter } = req.query;
-  
-  let query = `
-    SELECT 
-      a.id,
-      a.title,
-      a.message,
-      a.author_name as author,
-      a.age_filter as ageFilter,
-      a.created_at as createdAt,
-      a.attachment_path as attachmentUrl,
-      a.attachment_name as attachmentName
-    FROM announcements a
-  `;
-  
-  const params = [];
-  
-  if (ageFilter && ageFilter !== 'all') {
-    query += ` WHERE a.age_filter = ? OR a.age_filter = 'all'`;
-    params.push(ageFilter);
-  }
-  
-  query += ` ORDER BY a.created_at DESC`;
+  let connection;
 
-  db.query(query, params, (err, results) => {
-    if (err) {
-      console.error('Database error:', err);
-      return res.status(500).json({ 
-        success: false, 
-        message: 'Failed to fetch announcements' 
-      });
+  try {
+    connection = await db.promisePool.getConnection();
+    
+    let query = `
+      SELECT 
+        a.id,
+        a.title,
+        a.message,
+        a.author_name as author,
+        a.age_filter as ageFilter,
+        a.created_at as createdAt,
+        a.attachment_path as attachmentUrl,
+        a.attachment_name as attachmentName
+      FROM announcements a
+    `;
+    
+    const params = [];
+    
+    if (ageFilter && ageFilter !== 'all') {
+      query += ` WHERE a.age_filter = ? OR a.age_filter = 'all'`;
+      params.push(ageFilter);
     }
+    
+    query += ` ORDER BY a.created_at DESC`;
+
+    const [results] = await connection.query(query, params);
 
     // Format dates and attachment URLs
     const announcements = results.map(ann => ({
@@ -70,16 +66,25 @@ router.get('/', (req, res) => {
       success: true, 
       announcements 
     });
-  });
+  } catch (err) {
+    console.error('Database error:', err);
+    res.status(500).json({ 
+      success: false, 
+      message: 'Failed to fetch announcements' 
+    });
+  } finally {
+    if (connection) connection.release();
+  }
 });
 
 const authenticate = require('./authMiddleware');
 
 // POST /api/announcements - Create new announcement (protected)
-router.post('/', authenticate, upload.single('attachment'), (req, res) => {
+router.post('/', authenticate, upload.single('attachment'), async (req, res) => {
   const { title, message, ageFilter } = req.body;
   const file = req.file;
   const user = req.user; // User data from authentication middleware
+  let connection;
 
   if (!title || !message || !ageFilter) {
     // Clean up uploaded file if validation fails
@@ -90,41 +95,33 @@ router.post('/', authenticate, upload.single('attachment'), (req, res) => {
     });
   }
 
-  const query = `
-    INSERT INTO announcements (
-      title, 
-      message, 
-      author_id, 
-      author_name, 
-      age_filter, 
-      attachment_path, 
-      attachment_name
-    ) VALUES (?, ?, ?, ?, ?, ?, ?)
-  `;
+  try {
+    connection = await db.promisePool.getConnection();
 
-  const params = [
-    title,
-    message,
-    user.id, // From your localStorage user data
-    user.username || 'Unknown', // From your localStorage user data
-    ageFilter,
-    file ? file.path : null,
-    file ? file.originalname : null
-  ];
-
-  db.query(query, params, (err, result) => {
-    if (err) {
-      console.error('Database error:', err);
-      if (file) fs.unlinkSync(file.path);
-      return res.status(500).json({ 
-        success: false, 
-        message: 'Failed to create announcement' 
-      });
-    }
+    const [result] = await connection.query(
+      `INSERT INTO announcements (
+        title, 
+        message, 
+        author_id, 
+        author_name, 
+        age_filter, 
+        attachment_path, 
+        attachment_name
+      ) VALUES (?, ?, ?, ?, ?, ?, ?)`,
+      [
+        title,
+        message,
+        user.id,
+        user.username || 'Unknown',
+        ageFilter,
+        file ? file.path : null,
+        file ? file.originalname : null
+      ]
+    );
 
     // Get the newly created announcement
-    const getQuery = `
-      SELECT 
+    const [announcementResults] = await connection.query(
+      `SELECT 
         a.id,
         a.title,
         a.message,
@@ -134,33 +131,41 @@ router.post('/', authenticate, upload.single('attachment'), (req, res) => {
         a.attachment_path as attachmentUrl,
         a.attachment_name as attachmentName
       FROM announcements a
-      WHERE a.id = ?
-    `;
+      WHERE a.id = ?`,
+      [result.insertId]
+    );
 
-    db.query(getQuery, [result.insertId], (err, results) => {
-      if (err || results.length === 0) {
-        console.error('Failed to fetch new announcement:', err);
-        return res.json({ 
-          success: true, 
-          message: 'Announcement created but failed to return details' 
-        });
-      }
-
-      const announcement = {
-        ...results[0],
-        createdAt: new Date(results[0].createdAt).toISOString(),
-        attachmentUrl: results[0].attachmentUrl 
-          ? `${req.protocol}://${req.get('host')}/uploads/announcements/${path.basename(results[0].attachmentUrl)}`
-          : null
-      };
-
-      res.json({ 
+    if (announcementResults.length === 0) {
+      console.error('Failed to fetch new announcement');
+      return res.json({ 
         success: true, 
-        message: 'Announcement created successfully',
-        announcement 
+        message: 'Announcement created but failed to return details' 
       });
+    }
+
+    const announcement = {
+      ...announcementResults[0],
+      createdAt: new Date(announcementResults[0].createdAt).toISOString(),
+      attachmentUrl: announcementResults[0].attachmentUrl 
+        ? `${req.protocol}://${req.get('host')}/uploads/announcements/${path.basename(announcementResults[0].attachmentUrl)}`
+        : null
+    };
+
+    res.json({ 
+      success: true, 
+      message: 'Announcement created successfully',
+      announcement 
     });
-  });
+  } catch (err) {
+    console.error('Database error:', err);
+    if (file) fs.unlinkSync(file.path);
+    res.status(500).json({ 
+      success: false, 
+      message: 'Failed to create announcement' 
+    });
+  } finally {
+    if (connection) connection.release();
+  }
 });
 
 module.exports = router;
