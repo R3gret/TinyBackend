@@ -2,7 +2,7 @@ const express = require('express');
 const router = express.Router();
 const db = require('../db');
 
-router.post('/register', async (req, res) => {
+router.post('/', async (req, res) => {
   const {
     childFirstName, childLastName, childMiddleName, childGender, childAddress, childBirthday,
     childFirstLanguage, childSecondLanguage,
