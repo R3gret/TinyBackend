@@ -1,6 +1,6 @@
 const express = require('express');
 const router = express.Router();
-const db = require('../db');
+const db = require('../db'); // Updated to use mysql2/promise
 const bcrypt = require('bcryptjs');
 const jwt = require('jsonwebtoken');
 const { body, validationResult } = require('express-validator');
@@ -21,25 +21,30 @@ const validateLogin = [
 
 // Login route with rate limiting and validation
 router.post('/login', loginLimiter, validateLogin, async (req, res) => {
-  try {
-    // Validate input
-    const errors = validationResult(req);
-    if (!errors.isEmpty()) {
-      return res.status(400).json({ 
-        success: false, 
-        errors: errors.array(),
-        message: 'Validation failed' 
-      });
-    }
+  // Validate input
+  const errors = validationResult(req);
+  if (!errors.isEmpty()) {
+    return res.status(400).json({ 
+      success: false, 
+      errors: errors.array(),
+      message: 'Validation failed' 
+    });
+  }
 
-    const { username, password } = req.body;
+  const { username, password } = req.body;
+  let connection;
+
+  try {
+    // Get connection from pool
+    connection = await db.getConnection();
+    console.log('Database connection established for login attempt');
 
     // Query user from database using parameterized query
     const query = 'SELECT id, username, password, type FROM users WHERE username = ?';
-    const [results] = await db.promise().query(query, [username]);
+    const [results] = await connection.query(query, [username]);
 
     if (results.length === 0) {
-      // Generic message to prevent username enumeration
+      console.log('Login attempt failed - user not found:', username);
       return res.status(401).json({ 
         success: false, 
         message: 'Invalid credentials' 
@@ -47,14 +52,21 @@ router.post('/login', loginLimiter, validateLogin, async (req, res) => {
     }
 
     const user = results[0];
+    console.log('User found for login:', user.id);
 
     // Compare passwords securely
     const isMatch = await bcrypt.compare(password, user.password);
     if (!isMatch) {
+      console.log('Login attempt failed - password mismatch for user:', user.id);
       return res.status(401).json({ 
         success: false, 
         message: 'Invalid credentials' 
       });
+    }
+
+    // Verify JWT_SECRET exists
+    if (!process.env.JWT_SECRET) {
+      throw new Error('JWT_SECRET environment variable not set');
     }
 
     // Generate JWT token with secure settings
@@ -64,12 +76,14 @@ router.post('/login', loginLimiter, validateLogin, async (req, res) => {
         username: user.username, 
         type: user.type 
       },
-      process.env.JWT_SECRET, // Always use environment variable
+      process.env.JWT_SECRET,
       { 
         expiresIn: process.env.JWT_EXPIRES_IN || '1h',
         algorithm: 'HS256' 
       }
     );
+
+    console.log('Login successful for user:', user.id);
 
     // Set secure HTTP-only cookie
     res.cookie('token', token, {
@@ -79,7 +93,7 @@ router.post('/login', loginLimiter, validateLogin, async (req, res) => {
       maxAge: 3600000 // 1 hour
     });
 
-    // Successful login response (remove sensitive data)
+    // Successful login response
     return res.json({
       success: true,
       user: {
@@ -90,11 +104,27 @@ router.post('/login', loginLimiter, validateLogin, async (req, res) => {
     });
 
   } catch (error) {
-    console.error('Login error:', error);
-    return res.status(500).json({ 
-      success: false, 
-      message: 'Internal server error' 
+    console.error('Login error:', {
+      message: error.message,
+      stack: error.stack,
+      timestamp: new Date().toISOString()
     });
+
+    return res.status(500).json({ 
+      success: false,
+      message: 'Internal server error',
+      ...(process.env.NODE_ENV === 'development' && {
+        error: error.message,
+        stack: error.stack
+      })
+    });
+
+  } finally {
+    // Always release the connection back to the pool
+    if (connection) {
+      connection.release();
+      console.log('Database connection released');
+    }
   }
 });
 
