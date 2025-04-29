@@ -4,35 +4,43 @@ const router = express.Router();
 const db = require('../db');
 
 // Get all users
-router.get('/users', (req, res) => {
-  db.query('SELECT id, username, type FROM users', (err, results) => {
-    if (err) {
-      console.error('Database error:', err);
-      return res.status(500).json({ error: 'Failed to fetch users' });
-    }
+router.get('/users', async (req, res) => {
+  let connection;
+  try {
+    connection = await db.promisePool.getConnection();
+    const [results] = await connection.query('SELECT id, username, type FROM users');
     res.json(results);
-  });
+  } catch (err) {
+    console.error('Database error:', err);
+    res.status(500).json({ error: 'Failed to fetch users' });
+  } finally {
+    if (connection) connection.release();
+  }
 });
 
 // Search users
-router.get('/users/search', (req, res) => {
+router.get('/users/search', async (req, res) => {
   const { query } = req.query;
-  db.query(
-    'SELECT id, username, type FROM users WHERE username LIKE ?',
-    [`%${query}%`],
-    (err, results) => {
-      if (err) {
-        console.error('Database error:', err);
-        return res.status(500).json({ error: 'Failed to search users' });
-      }
-      res.json(results);
-    }
-  );
+  let connection;
+  try {
+    connection = await db.promisePool.getConnection();
+    const [results] = await connection.query(
+      'SELECT id, username, type FROM users WHERE username LIKE ?',
+      [`%${query}%`]
+    );
+    res.json(results);
+  } catch (err) {
+    console.error('Database error:', err);
+    res.status(500).json({ error: 'Failed to search users' });
+  } finally {
+    if (connection) connection.release();
+  }
 });
 
-// Create user
+// Create user with hashed password
 router.post('/users', async (req, res) => {
   const { username, password, type = 'user' } = req.body;
+  let connection;
 
   // Validation
   if (!username || !password) {
@@ -43,46 +51,43 @@ router.post('/users', async (req, res) => {
     return res.status(400).json({ error: 'Password must be at least 8 characters' });
   }
 
-  // Check if username exists
-  db.query('SELECT id FROM users WHERE username = ?', [username], async (err, results) => {
-    if (err) {
-      console.error('Database error:', err);
-      return res.status(500).json({ error: 'Database error checking username' });
-    }
+  try {
+    connection = await db.promisePool.getConnection();
+    
+    // Check if username exists
+    const [existingUsers] = await connection.query(
+      'SELECT id FROM users WHERE username = ?', 
+      [username]
+    );
 
-    if (results.length > 0) {
+    if (existingUsers.length > 0) {
       return res.status(400).json({ error: 'Username already exists' });
     }
 
-    try {
-      const hashedPassword = await bcrypt.hash(password, 10); // Salt rounds = 10
+    // Hash the password
+    const hashedPassword = await bcrypt.hash(password, 10);
 
-      // Insert new user with hashed password
-      db.query(
-        'INSERT INTO users (username, password, type) VALUES (?, ?, ?)',
-        [username, hashedPassword, type],
-        (err, result) => {
-          if (err) {
-            console.error('Database error:', err);
-            return res.status(500).json({ error: 'Failed to create user' });
-          }
+    // Insert new user
+    const [result] = await connection.query(
+      'INSERT INTO users (username, password, type) VALUES (?, ?, ?)',
+      [username, hashedPassword, type]
+    );
 
-          res.status(201).json({
-            id: result.insertId,
-            username,
-            type
-          });
-        }
-      );
-    } catch (hashErr) {
-      console.error('Hashing error:', hashErr);
-      return res.status(500).json({ error: 'Failed to hash password' });
-    }
-  });
+    res.status(201).json({
+      id: result.insertId,
+      username,
+      type
+    });
+  } catch (err) {
+    console.error('Error creating user:', err);
+    res.status(500).json({ error: 'Failed to create user' });
+  } finally {
+    if (connection) connection.release();
+  }
 });
 
-// Add to routes/users.js
-router.post('/user-info', (req, res) => {
+// Add user info
+router.post('/user-info', async (req, res) => {
   const {
     user_id,
     full_name,
@@ -93,61 +98,80 @@ router.post('/user-info', (req, res) => {
     website,
     social_media
   } = req.body;
-
-  db.query(
-    `INSERT INTO user_other_info 
-    (user_id, full_name, email, phone, address, organization, website, social_media) 
-    VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
-    [user_id, full_name, email, phone, address, organization, website, social_media],
-    (err, result) => {
-      if (err) {
-        console.error('Database error:', err);
-        return res.status(500).json({ error: 'Failed to save user info' });
-      }
-      res.status(201).json({ success: true });
-    }
-  );
+  
+  let connection;
+  try {
+    connection = await db.promisePool.getConnection();
+    const [result] = await connection.query(
+      `INSERT INTO user_other_info 
+      (user_id, full_name, email, phone, address, organization, website, social_media) 
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+      [user_id, full_name, email, phone, address, organization, website, social_media]
+    );
+    res.status(201).json({ success: true });
+  } catch (err) {
+    console.error('Database error:', err);
+    res.status(500).json({ error: 'Failed to save user info' });
+  } finally {
+    if (connection) connection.release();
+  }
 });
 
-router.get('/users/:id/password', (req, res) => {
+// Get user password (Note: This should be secured in production)
+router.get('/users/:id/password', async (req, res) => {
   const { id } = req.params;
+  let connection;
   
-  db.query('SELECT password FROM users WHERE id = ?', [id], (err, results) => {
-    if (err) {
-      console.error('Database error:', err);
-      return res.status(500).json({ error: 'Failed to fetch password' });
-    }
+  try {
+    connection = await db.promisePool.getConnection();
+    const [results] = await connection.query(
+      'SELECT password FROM users WHERE id = ?', 
+      [id]
+    );
     
     if (results.length === 0) {
       return res.status(404).json({ error: 'User not found' });
     }
     
     res.json({ password: results[0].password });
-  });
+  } catch (err) {
+    console.error('Database error:', err);
+    res.status(500).json({ error: 'Failed to fetch password' });
+  } finally {
+    if (connection) connection.release();
+  }
 });
 
 // Delete user account
-router.delete('/users/:id', (req, res) => {
+router.delete('/users/:id', async (req, res) => {
   const { id } = req.params;
+  let connection;
 
-  db.query('DELETE FROM users WHERE id = ?', [id], (err, result) => {
-    if (err) {
-      console.error('Database error:', err);
-      return res.status(500).json({ error: 'Failed to delete user' });
-    }
+  try {
+    connection = await db.promisePool.getConnection();
+    const [result] = await connection.query(
+      'DELETE FROM users WHERE id = ?', 
+      [id]
+    );
 
     if (result.affectedRows === 0) {
       return res.status(404).json({ error: 'User not found' });
     }
 
     res.json({ success: true, message: 'User deleted successfully' });
-  });
+  } catch (err) {
+    console.error('Database error:', err);
+    res.status(500).json({ error: 'Failed to delete user' });
+  } finally {
+    if (connection) connection.release();
+  }
 });
 
-// Edit user account
+// Edit user account with secure password handling
 router.put('/users/:id', async (req, res) => {
   const { id } = req.params;
   const { username, password, type } = req.body;
+  let connection;
 
   // Validation
   if (!username || !type) {
@@ -155,13 +179,14 @@ router.put('/users/:id', async (req, res) => {
   }
 
   try {
+    connection = await db.promisePool.getConnection();
+    
     // Get current user data
-    const [currentUser] = await new Promise((resolve, reject) => {
-      db.query('SELECT * FROM users WHERE id = ?', [id], (err, results) => {
-        if (err) return reject(err);
-        resolve(results);
-      });
-    });
+    const [users] = await connection.query(
+      'SELECT * FROM users WHERE id = ?', 
+      [id]
+    );
+    const currentUser = users[0];
 
     if (!currentUser) {
       return res.status(404).json({ error: 'User not found' });
@@ -175,7 +200,7 @@ router.put('/users/:id', async (req, res) => {
         return res.status(400).json({ error: 'Password must be at least 8 characters' });
       }
       
-      // Hash the new password (only if it's different from current)
+      // Verify if the password is different before hashing
       const isSamePassword = await bcrypt.compare(password, currentUser.password);
       if (!isSamePassword) {
         hashedPassword = await bcrypt.hash(password, 10);
@@ -184,30 +209,21 @@ router.put('/users/:id', async (req, res) => {
 
     // Check for duplicate username
     if (username !== currentUser.username) {
-      const [existingUser] = await new Promise((resolve, reject) => {
-        db.query('SELECT id FROM users WHERE username = ? AND id != ?', 
-          [username, id], (err, results) => {
-            if (err) return reject(err);
-            resolve(results);
-        });
-      });
+      const [existingUsers] = await connection.query(
+        'SELECT id FROM users WHERE username = ? AND id != ?', 
+        [username, id]
+      );
 
-      if (existingUser) {
+      if (existingUsers.length > 0) {
         return res.status(400).json({ error: 'Username already exists' });
       }
     }
 
     // Update user
-    const result = await new Promise((resolve, reject) => {
-      db.query(
-        'UPDATE users SET username = ?, password = ?, type = ? WHERE id = ?',
-        [username, hashedPassword, type, id],
-        (err, result) => {
-          if (err) return reject(err);
-          resolve(result);
-        }
-      );
-    });
+    const [result] = await connection.query(
+      'UPDATE users SET username = ?, password = ?, type = ? WHERE id = ?',
+      [username, hashedPassword, type, id]
+    );
 
     if (result.affectedRows === 0) {
       return res.status(404).json({ error: 'User not found' });
@@ -217,6 +233,8 @@ router.put('/users/:id', async (req, res) => {
   } catch (err) {
     console.error('Error updating user:', err);
     res.status(500).json({ error: 'Failed to update user' });
+  } finally {
+    if (connection) connection.release();
   }
 });
 
