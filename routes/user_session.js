@@ -4,28 +4,21 @@ const db = require('../db');
 const bcrypt = require('bcryptjs');
 const { body, validationResult } = require('express-validator');
 
-// Helper function for database queries with promises
-const queryAsync = (sql, params) => {
-  return promisePool.query(sql, params)
-    .then(([rows]) => rows) // Extract rows from the result
-    .catch(err => {
-      console.error('Database query error:', err);
-      throw err;
-    });
-};
-
 // Get current user's full details
 router.get('/current-user/details', async (req, res) => {
+  let connection;
   try {
+    // 1. Get user ID from query parameter
     const userId = req.query.userId;
 
     if (!userId) {
-      return res.status(400).json({ 
-        success: false, 
-        message: 'Missing userId in query' 
-      });
+      return res.status(400).json({ success: false, message: 'Missing userId in query' });
     }
 
+    // 2. Get connection from pool
+    connection = await db.promisePool.getConnection();
+
+    // 3. Query database for user details
     const query = `
       SELECT 
         u.*, 
@@ -42,13 +35,10 @@ router.get('/current-user/details', async (req, res) => {
       WHERE u.id = ?
     `;
 
-    const results = await queryAsync(query, [userId]);
+    const [results] = await connection.query(query, [userId]);
 
     if (results.length === 0) {
-      return res.status(404).json({ 
-        success: false, 
-        message: 'User not found' 
-      });
+      return res.status(404).json({ success: false, message: 'User not found' });
     }
 
     const userData = {
@@ -75,33 +65,39 @@ router.get('/current-user/details', async (req, res) => {
       'website', 
       'social_media',
       'profile_pic'
-    ].forEach(field => delete userData[field]);
-
-    return res.json({ 
-      success: true, 
-      user: userData 
+    ].forEach(field => {
+      delete userData[field];
     });
 
+    res.json({ success: true, user: userData });
   } catch (err) {
-    console.error('Error in current-user/details:', err);
-    return res.status(500).json({ 
+    console.error('Error:', err);
+    res.status(500).json({ 
       success: false, 
       message: 'Server error',
       error: process.env.NODE_ENV === 'development' ? err.message : undefined
     });
+  } finally {
+    if (connection) connection.release();
   }
 });
 
 // Update profile with validation
 router.put('/update-profile', [
-  body('userId').notEmpty().withMessage('User ID is required'),
   body('full_name').optional().trim().isLength({ min: 2 }).withMessage('Full name must be at least 2 characters'),
   body('email').optional().isEmail().withMessage('Invalid email format'),
   body('phone').optional().isMobilePhone().withMessage('Invalid phone number'),
   body('website').optional().isURL().withMessage('Invalid website URL'),
   body('social_media').optional().isURL().withMessage('Invalid social media URL')
 ], async (req, res) => {
+  let connection;
   try {
+    console.log('Received update data:', {
+      organization: req.body.organization,
+      website: req.body.website,
+      social_media: req.body.social_media
+    });
+
     // Validate request
     const errors = validationResult(req);
     if (!errors.isEmpty()) {
@@ -112,7 +108,12 @@ router.put('/update-profile', [
       });
     }
 
+    // Get user ID from body
     const userId = req.body.userId;
+    if (!userId) {
+      return res.status(400).json({ success: false, message: 'Missing userId in request body' });
+    }
+
     const {
       full_name,
       email,
@@ -123,37 +124,23 @@ router.put('/update-profile', [
       social_media
     } = req.body;
 
-    // Check if user exists
-    const userExists = await queryAsync(
-      'SELECT id FROM users WHERE id = ?', 
-      [userId]
-    );
+    // Get connection from pool
+    connection = await db.promisePool.getConnection();
 
-    if (userExists.length === 0) {
-      return res.status(404).json({ 
-        success: false, 
-        message: 'User not found' 
-      });
+    // Check if user exists first
+    const [userCheck] = await connection.query('SELECT id FROM users WHERE id = ?', [userId]);
+
+    if (userCheck.length === 0) {
+      return res.status(404).json({ success: false, message: 'User not found' });
     }
 
     // Check if user info exists
-    const infoExists = await queryAsync(
-      'SELECT user_id FROM user_other_info WHERE user_id = ?',
-      [userId]
-    );
+    const [infoCheck] = await connection.query('SELECT user_id FROM user_other_info WHERE user_id = ?', [userId]);
 
-    if (infoExists.length === 0) {
-      // Create new record if doesn't exist
-      await queryAsync(
-        `INSERT INTO user_other_info 
-        (user_id, full_name, email, phone, address, organization, website, social_media) 
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
-        [userId, full_name, email, phone, address, organization, website, social_media]
-      );
-    } else {
-      // Update existing record
-      await queryAsync(
-        `UPDATE user_other_info
+    if (infoCheck.length > 0) {
+      // Update existing info
+      const query = `
+        UPDATE user_other_info
         SET 
           full_name = ?, 
           email = ?, 
@@ -162,12 +149,28 @@ router.put('/update-profile', [
           organization = ?, 
           website = ?, 
           social_media = ?
-        WHERE user_id = ?`,
+        WHERE user_id = ?
+      `;
+
+      await connection.query(
+        query,
         [full_name, email, phone, address, organization, website, social_media, userId]
+      );
+    } else {
+      // Insert new info
+      const insertQuery = `
+        INSERT INTO user_other_info 
+        (user_id, full_name, email, phone, address, organization, website, social_media) 
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+      `;
+
+      await connection.query(
+        insertQuery,
+        [userId, full_name, email, phone, address, organization, website, social_media]
       );
     }
 
-    return res.json({ 
+    res.json({ 
       success: true, 
       message: 'Profile updated successfully',
       updatedFields: {
@@ -180,20 +183,20 @@ router.put('/update-profile', [
         social_media
       }
     });
-
   } catch (err) {
-    console.error('Error in update-profile:', err);
-    return res.status(500).json({ 
+    console.error('Error:', err);
+    res.status(500).json({ 
       success: false, 
       message: 'Server error',
       error: process.env.NODE_ENV === 'development' ? err.message : undefined
     });
+  } finally {
+    if (connection) connection.release();
   }
 });
 
 // Change password with validation
 router.put('/change-password', [
-  body('userId').notEmpty().withMessage('User ID is required'),
   body('currentPassword')
     .notEmpty().withMessage('Current password is required')
     .isString().withMessage('Current password must be a string'),
@@ -206,12 +209,25 @@ router.put('/change-password', [
     .matches(/[^A-Za-z0-9]/).withMessage('Password must contain at least one special character'),
   body('confirmPassword')
     .notEmpty().withMessage('Confirm password is required')
-    .custom((value, { req }) => value === req.body.newPassword).withMessage('Passwords do not match')
+    .custom((value, { req }) => {
+      if (value !== req.body.newPassword) {
+        throw new Error('Passwords do not match');
+      }
+      return true;
+    })
 ], async (req, res) => {
+  let connection;
   try {
+    console.log('Received password change request:', {
+      body: req.body,
+      query: req.query,
+      userId: req.body.userId || req.query.userId
+    });
+
     // Validate request
     const errors = validationResult(req);
     if (!errors.isEmpty()) {
+      console.warn('Validation errors:', errors.array());
       return res.status(400).json({ 
         success: false, 
         message: 'Validation failed',
@@ -219,36 +235,33 @@ router.put('/change-password', [
       });
     }
 
-    const { userId, currentPassword, newPassword } = req.body;
-
-    // Get user's current password
-    const [user] = await queryAsync(
-      'SELECT id, password FROM users WHERE id = ?', 
-      [userId]
-    );
-
-    if (!user) {
-      return res.status(404).json({ 
+    // Get user ID
+    const userId = req.query.userId || req.body.userId;
+    if (!userId) {
+      console.error('Missing userId in request');
+      return res.status(400).json({ 
         success: false, 
-        message: 'User not found' 
+        message: 'User ID is required' 
       });
     }
 
-    // Verify current password
-    const isMatch = await bcrypt.compare(currentPassword, user.password);
-    if (!isMatch) {
-      return res.status(403).json({ 
-        success: false, 
-        message: 'Incorrect current password',
-        errors: [{
-          path: 'currentPassword',
-          msg: 'Incorrect current password'
+    const { currentPassword, newPassword, confirmPassword } = req.body;
+
+    // Additional manual validation
+    if (newPassword !== confirmPassword) {
+      console.error('Password mismatch detected in manual validation');
+      return res.status(400).json({
+        success: false,
+        message: 'Passwords do not match',
+        errors: [{ 
+          path: 'confirmPassword', 
+          msg: 'Passwords do not match' 
         }]
       });
     }
 
-    // Check if new password is different
     if (currentPassword === newPassword) {
+      console.warn('New password matches current password');
       return res.status(400).json({ 
         success: false, 
         message: 'New password must be different from current password',
@@ -259,27 +272,64 @@ router.put('/change-password', [
       });
     }
 
-    // Hash and update password
+    // Get connection from pool
+    connection = await db.promisePool.getConnection();
+
+    // Get user's current password hash
+    const [users] = await connection.query('SELECT id, password FROM users WHERE id = ?', [userId]);
+
+    if (users.length === 0) {
+      console.error('User not found with ID:', userId);
+      return res.status(404).json({ 
+        success: false, 
+        message: 'User not found' 
+      });
+    }
+
+    // Verify current password
+    const isMatch = await bcrypt.compare(currentPassword, users[0].password);
+    if (!isMatch) {
+      console.warn('Incorrect current password provided');
+      return res.status(403).json({ 
+        success: false, 
+        message: 'Incorrect current password',
+        errors: [{
+          path: 'currentPassword',
+          msg: 'Incorrect current password'
+        }]
+      });
+    }
+
+    // Hash the new password
     const hashedPassword = await bcrypt.hash(newPassword, 10);
-    await queryAsync(
+
+    // Update password
+    await connection.query(
       'UPDATE users SET password = ? WHERE id = ?',
       [hashedPassword, userId]
     );
 
-    return res.json({ 
+    console.log('Password successfully updated for user:', userId);
+    
+    res.json({ 
       success: true, 
       message: 'Password updated successfully',
       passwordChanged: true,
       changedAt: new Date().toISOString()
     });
-
   } catch (err) {
-    console.error('Error in change-password:', err);
-    return res.status(500).json({ 
+    console.error('Error in password change endpoint:', {
+      message: err.message,
+      stack: err.stack
+    });
+    
+    res.status(500).json({ 
       success: false, 
-      message: 'Server error',
+      message: 'Internal server error',
       error: process.env.NODE_ENV === 'development' ? err.message : undefined
     });
+  } finally {
+    if (connection) connection.release();
   }
 });
 
