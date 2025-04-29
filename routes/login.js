@@ -11,9 +11,8 @@ const loginLimiter = rateLimit({
   windowMs: 15 * 60 * 1000,
   max: 5,
   message: 'Too many login attempts, please try again later',
-  trustProxy: true, // Add this for proxy support
+  trustProxy: true,
   keyGenerator: (req) => {
-    // Use x-forwarded-for header if present
     return req.headers['x-forwarded-for'] || req.ip;
   }
 });
@@ -36,13 +35,11 @@ router.post('/login', loginLimiter, validateLogin, async (req, res) => {
   let connection;
 
   try {
-    // Get connection with timeout handling
     connection = await db.promisePool.getConnection();
     
-    // Query with timeout
     const [results] = await connection.query({
       sql: 'SELECT id, username, password, type FROM users WHERE username = ?',
-      timeout: 5000 // 5 second timeout
+      timeout: 5000
     }, [username]);
 
     if (results.length === 0) {
@@ -53,8 +50,24 @@ router.post('/login', loginLimiter, validateLogin, async (req, res) => {
     }
 
     const user = results[0];
-    const isMatch = await bcrypt.compare(password, user.password);
     
+    // TEMPORARY: Plain text password comparison
+    // =========================================
+    // COMMENT OUT THE BELOW LINE WHEN REVERTING TO BCRYPT
+    const isMatch = password === user.password;
+    
+    // UNCOMMENT THE BELOW BLOCK WHEN REVERTING TO BCRYPT
+    /*
+    const isMatch = await bcrypt.compare(password, user.password);
+    if (!isMatch) {
+      return res.status(401).json({ 
+        success: false, 
+        message: 'Invalid credentials' 
+      });
+    }
+    */
+    // =========================================
+
     if (!isMatch) {
       return res.status(401).json({ 
         success: false, 
