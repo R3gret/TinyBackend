@@ -28,7 +28,7 @@ router.post('/', async (req, res) => {
     } else {
       // Step 2: If no plan exists, insert a new plan
       const [insertResult] = await connection.query(
-        'INSERT INTO weekly_plans (date_of_week) VALUES (?)', 
+        'INSERT INTO weekly_plans (date) VALUES (?)', 
         [date]
       );
       planId = insertResult.insertId;
