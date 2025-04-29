@@ -48,7 +48,7 @@ app.use('/api/account', require('./routes/account')); // This will properly moun
 app.use('/api/user_session', require('./routes/user_session'));
 app.use('/api/domains', require('./routes/domains'));
 app.use('/api/files', require('./routes/fileRoutes'));
-app.use('/api/announcement', require('./routes/announcement'));
+app.use('/api/announcements', require('./routes/announcement'));
 
 // Static files
 app.use('/uploads/announcements', express.static(path.join(__dirname, 'uploads/announcements')));
