@@ -22,47 +22,51 @@ const storage = multer.diskStorage({
 const upload = multer({ storage });
 
 // GET /api/categories - Returns all categories
-router.get('/categories', (req, res) => {
-  const query = 'SELECT * FROM domain_file_categories';
-  
-  db.query(query, (err, results) => {
-    if (err) {
-      console.error('Database query error:', err);
-      return res.status(500).json({ 
-        success: false, 
-        message: 'Failed to fetch categories' 
-      });
-    }
-
+router.get('/categories', async (req, res) => {
+  let connection;
+  try {
+    connection = await db.promisePool.getConnection();
+    const [results] = await connection.query('SELECT * FROM domain_file_categories');
+    
     return res.json({
       success: true,
       categories: results
     });
-  });
+  } catch (err) {
+    console.error('Database query error:', err);
+    return res.status(500).json({ 
+      success: false, 
+      message: 'Failed to fetch categories' 
+    });
+  } finally {
+    if (connection) connection.release();
+  }
 });
 
 // GET /api/age-groups - Returns all age groups
-router.get('/age-groups', (req, res) => {
-  const query = 'SELECT * FROM age_groups';
-  
-  db.query(query, (err, results) => {
-    if (err) {
-      console.error('Database query error:', err);
-      return res.status(500).json({ 
-        success: false, 
-        message: 'Failed to fetch age groups' 
-      });
-    }
-
+router.get('/age-groups', async (req, res) => {
+  let connection;
+  try {
+    connection = await db.promisePool.getConnection();
+    const [results] = await connection.query('SELECT * FROM age_groups');
+    
     return res.json({
       success: true,
       ageGroups: results
     });
-  });
+  } catch (err) {
+    console.error('Database query error:', err);
+    return res.status(500).json({ 
+      success: false, 
+      message: 'Failed to fetch age groups' 
+    });
+  } finally {
+    if (connection) connection.release();
+  }
 });
 
 // GET /api/files - Takes category_id and age_group_id as query params
-router.get('/', (req, res) => {
+router.get('/', async (req, res) => {
   const { category_id, age_group_id } = req.query;
   
   if (!category_id || !age_group_id) {
@@ -72,26 +76,31 @@ router.get('/', (req, res) => {
     });
   }
 
-  const query = 'SELECT * FROM files WHERE category_id = ? AND age_group_id = ?';
-  
-  db.query(query, [category_id, age_group_id], (err, results) => {
-    if (err) {
-      console.error('Database query error:', err);
-      return res.status(500).json({ 
-        success: false, 
-        message: 'Failed to fetch files' 
-      });
-    }
-
+  let connection;
+  try {
+    connection = await db.promisePool.getConnection();
+    const [results] = await connection.query(
+      'SELECT * FROM files WHERE category_id = ? AND age_group_id = ?',
+      [category_id, age_group_id]
+    );
+    
     return res.json({
       success: true,
       files: results
     });
-  });
+  } catch (err) {
+    console.error('Database query error:', err);
+    return res.status(500).json({ 
+      success: false, 
+      message: 'Failed to fetch files' 
+    });
+  } finally {
+    if (connection) connection.release();
+  }
 });
 
 // POST /api/files - Handles file uploads
-router.post('/', upload.single('file_data'), (req, res) => {
+router.post('/', upload.single('file_data'), async (req, res) => {
   const { category_id, age_group_id, file_name } = req.body;
   const file = req.file;
 
@@ -106,67 +115,60 @@ router.post('/', upload.single('file_data'), (req, res) => {
     });
   }
 
-  // Read the file data
-  fs.readFile(file.path, (err, fileData) => {
-    if (err) {
-      console.error('Error reading file:', err);
-      fs.unlinkSync(file.path);
-      return res.status(500).json({ 
-        success: false, 
-        message: 'Error processing file' 
-      });
-    }
+  let connection;
+  try {
+    // Read the file data
+    const fileData = await fs.promises.readFile(file.path);
+    connection = await db.promisePool.getConnection();
 
-    const query = `
-      INSERT INTO files 
+    const [result] = await connection.query(
+      `INSERT INTO files 
       (category_id, age_group_id, file_name, file_type, file_data, file_path) 
-      VALUES (?, ?, ?, ?, ?, ?)
-    `;
-    
-    const params = [
-      category_id, 
-      age_group_id, 
-      file_name, 
-      file.mimetype, 
-      fileData,
-      file.path // Store the path for later downloads
-    ];
+      VALUES (?, ?, ?, ?, ?, ?)`,
+      [
+        category_id, 
+        age_group_id, 
+        file_name, 
+        file.mimetype, 
+        fileData,
+        file.path // Store the path for later downloads
+      ]
+    );
 
-    db.query(query, params, (err, result) => {
-      // Clean up the file now that it's stored in DB
-      fs.unlinkSync(file.path);
+    // Clean up the file now that it's stored in DB
+    fs.unlinkSync(file.path);
 
-      if (err) {
-        console.error('Database query error:', err);
-        return res.status(500).json({ 
-          success: false, 
-          message: 'Failed to upload file' 
-        });
-      }
-
-      return res.json({
-        success: true,
-        message: 'File uploaded successfully',
-        fileId: result.insertId
-      });
+    return res.json({
+      success: true,
+      message: 'File uploaded successfully',
+      fileId: result.insertId
     });
-  });
+  } catch (err) {
+    // Clean up the file if there was an error
+    if (file) {
+      fs.unlinkSync(file.path);
+    }
+    console.error('Error processing file:', err);
+    return res.status(500).json({ 
+      success: false, 
+      message: 'Failed to upload file' 
+    });
+  } finally {
+    if (connection) connection.release();
+  }
 });
 
 // GET /api/files/download/:fileId - Handles file downloads
-router.get('/download/:fileId', (req, res) => {
+router.get('/download/:fileId', async (req, res) => {
   const { fileId } = req.params;
 
-  const query = 'SELECT file_name, file_type, file_data FROM files WHERE file_id = ?';
-  
-  db.query(query, [fileId], (err, results) => {
-    if (err) {
-      console.error('Database query error:', err);
-      return res.status(500).json({ 
-        success: false, 
-        message: 'Failed to download file' 
-      });
-    }
+  let connection;
+  try {
+    connection = await db.promisePool.getConnection();
+    const [results] = await connection.query(
+      'SELECT file_name, file_type, file_data FROM files WHERE file_id = ?',
+      [fileId]
+    );
 
     if (results.length === 0) {
       return res.status(404).json({ 
@@ -183,11 +185,19 @@ router.get('/download/:fileId', (req, res) => {
     
     // Send the file data
     res.send(file.file_data);
-  });
+  } catch (err) {
+    console.error('Database query error:', err);
+    return res.status(500).json({ 
+      success: false, 
+      message: 'Failed to download file' 
+    });
+  } finally {
+    if (connection) connection.release();
+  }
 });
 
 // GET /api/files/counts - Returns file counts per category for a specific age group
-router.get('/counts', (req, res) => {
+router.get('/counts', async (req, res) => {
   const { age_group_id } = req.query;
   
   if (!age_group_id) {
@@ -197,21 +207,16 @@ router.get('/counts', (req, res) => {
     });
   }
 
-  const query = `
-    SELECT category_id, COUNT(*) as count 
-    FROM files 
-    WHERE age_group_id = ?
-    GROUP BY category_id
-  `;
-  
-  db.query(query, [age_group_id], (err, results) => {
-    if (err) {
-      console.error('Database query error:', err);
-      return res.status(500).json({ 
-        success: false, 
-        message: 'Failed to fetch file counts' 
-      });
-    }
+  let connection;
+  try {
+    connection = await db.promisePool.getConnection();
+    const [results] = await connection.query(
+      `SELECT category_id, COUNT(*) as count 
+      FROM files 
+      WHERE age_group_id = ?
+      GROUP BY category_id`,
+      [age_group_id]
+    );
 
     // Convert the array to an object for easier lookup
     const counts = {};
@@ -223,9 +228,15 @@ router.get('/counts', (req, res) => {
       success: true,
       counts
     });
-  });
+  } catch (err) {
+    console.error('Database query error:', err);
+    return res.status(500).json({ 
+      success: false, 
+      message: 'Failed to fetch file counts' 
+    });
+  } finally {
+    if (connection) connection.release();
+  }
 });
-
-
 
 module.exports = router;
