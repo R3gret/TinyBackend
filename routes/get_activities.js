@@ -3,7 +3,7 @@ const router = express.Router();
 const db = require('../db');
 
 // GET /api/get_activities?date=YYYY-MM-DD
-router.get('/get_activities', async (req, res) => {
+router.get('/', async (req, res) => {
   const { date } = req.query;
   let connection;
 
