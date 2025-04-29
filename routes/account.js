@@ -439,6 +439,80 @@ userInfoRouter.post('/', [
   }
 });
 
+// Replace the previous basic-info endpoint with this user-info endpoint
+router.post('/user-info', [
+  body('user_id').isInt().withMessage('Valid user ID required'),
+  body('full_name').trim().isLength({ min: 2 }).withMessage('Full name must be at least 2 characters'),
+  body('email').isEmail().withMessage('Invalid email format'),
+  body('phone').isMobilePhone().withMessage('Invalid phone number'),
+  body('address').isString().withMessage('Address must be a string')
+], async (req, res) => {
+  const errors = validationResult(req);
+  if (!errors.isEmpty()) {
+    return res.status(400).json({ 
+      success: false, 
+      message: 'Validation failed',
+      errors: errors.array() 
+    });
+  }
+
+  try {
+    const { user_id, full_name, email, phone, address } = req.body;
+
+    await withConnection(async (connection) => {
+      await connection.beginTransaction();
+
+      try {
+        // Check if user exists
+        const [userCheck] = await connection.query(
+          'SELECT id FROM users WHERE id = ?',
+          [user_id]
+        );
+
+        if (userCheck.length === 0) {
+          throw new Error('User not found');
+        }
+
+        // Check if info already exists (shouldn't for new account)
+        const [infoCheck] = await connection.query(
+          'SELECT user_id FROM user_other_info WHERE user_id = ?',
+          [user_id]
+        );
+
+        if (infoCheck.length > 0) {
+          throw new Error('User info already exists');
+        }
+
+        // Insert only the specified fields
+        await connection.query(
+          `INSERT INTO user_other_info 
+          (user_id, full_name, email, phone, address) 
+          VALUES (?, ?, ?, ?, ?)`,
+          [user_id, full_name, email, phone, address]
+        );
+
+        await connection.commit();
+      } catch (err) {
+        await connection.rollback();
+        throw err;
+      }
+    });
+
+    res.status(201).json({ 
+      success: true,
+      message: 'User info saved successfully'
+    });
+  } catch (err) {
+    const status = err.message === 'User not found' ? 404 : 
+                  err.message === 'User info already exists' ? 409 : 500;
+    res.status(status).json({ 
+      success: false, 
+      message: err.message,
+      error: process.env.NODE_ENV === 'development' ? err.message : undefined
+    });
+  }
+});
+
 router.use('/:userId/info', userInfoRouter);
 
 module.exports = router;
