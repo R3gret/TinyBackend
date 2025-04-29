@@ -3,7 +3,7 @@ const express = require('express');
 const router = express.Router();
 const db = require('../db');
 
-router.get('/students', async (req, res) => {
+router.get('/', async (req, res) => {
   const { ageFilter } = req.query;
   
   let query = 'SELECT student_id, first_name, middle_name, last_name, birthdate, gender FROM students';
