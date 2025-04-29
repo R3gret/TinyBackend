@@ -35,34 +35,22 @@ app.use(morgan('combined'));
 app.use(express.json({ limit: '10kb' }));
 app.use(express.urlencoded({ extended: true, limit: '10kb' }));
 
-// API routes
-const apiRoutes = express.Router();
+// API routes - Explicit mounting (recommended approach)
+app.use('/api/login', require('./routes/login'));
+app.use('/api/students', require('./routes/students'));
+app.use('/api/register', require('./routes/register'));
+app.use('/api/add_activity', require('./routes/add_activity'));
+app.use('/api/get_activities', require('./routes/get_activities'));
+app.use('/api/get_scheduled_dates', require('./routes/get_scheduled_dates'));
+app.use('/api/attendance', require('./routes/attendance'));
+app.use('/api/users', require('./routes/users'));
+app.use('/api/account', require('./routes/account')); // This will properly mount account routes
+app.use('/api/user_session', require('./routes/user_session'));
+app.use('/api/domains', require('./routes/domains'));
+app.use('/api/uploads', require('./routes/fileRoutes'));
+app.use('/api/announcement', require('./routes/announcement'));
 
-// Import routes
-const routes = [
-  require('./routes/login'),
-  require('./routes/students'),
-  require('./routes/register'),
-  require('./routes/add_activity'),
-  require('./routes/get_activities'),
-  require('./routes/get_scheduled_dates'),
-  require('./routes/attendance'),
-  require('./routes/users'),
-  require('./routes/account'),
-  require('./routes/user_session'),
-  require('./routes/domains'),
-  require('./routes/fileRoutes'),
-  require('./routes/announcement')
-];
-
-// Mount all routes under /api
-routes.forEach(route => {
-  apiRoutes.use(route);
-});
-
-app.use('/api', apiRoutes);
-
-// Static files (should come after API routes)
+// Static files
 app.use('/uploads/announcements', express.static(path.join(__dirname, 'uploads/announcements')));
 
 // Health check endpoint
@@ -83,7 +71,11 @@ if (process.env.NODE_ENV !== 'production') {
     } else if (middleware.name === 'router') {
       middleware.handle.stack.forEach(handler => {
         if (handler.route) {
-          console.log(`${Object.keys(handler.route.methods)[0].toUpperCase()} /api${handler.route.path}`);
+          const basePath = middleware.regexp.toString()
+            .replace('/^', '')
+            .replace('\\/', '')
+            .replace('(?=\\/|$)/i', '');
+          console.log(`${Object.keys(handler.route.methods)[0].toUpperCase()} /${basePath}${handler.route.path}`);
         }
       });
     }
