@@ -12,13 +12,19 @@ const PORT = process.env.PORT || 3001;
 app.use(helmet());
 app.use(cors({
   origin: process.env.FRONTEND_URL || 'http://localhost:3000',
-  credentials: true
+  credentials: true,
+  methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'],
+  allowedHeaders: ['Content-Type', 'Authorization']
 }));
 
 // Rate limiting
 const limiter = rateLimit({
   windowMs: 15 * 60 * 1000, // 15 minutes
-  max: 100 // limit each IP to 100 requests per windowMs
+  max: 100, // limit each IP to 100 requests per windowMs
+  trustProxy: true,
+  keyGenerator: (req) => {
+    return req.headers['x-forwarded-for'] || req.ip;
+  }
 });
 app.use(limiter);
 
@@ -28,9 +34,6 @@ app.use(morgan('combined'));
 // Body parsing
 app.use(express.json({ limit: '10kb' }));
 app.use(express.urlencoded({ extended: true, limit: '10kb' }));
-
-// Static files
-app.use('/uploads/announcements', express.static(path.join(__dirname, 'uploads/announcements')));
 
 // API routes
 const apiRoutes = express.Router();
@@ -54,42 +57,92 @@ const routes = [
 
 // Mount all routes under /api
 routes.forEach(route => {
-  apiRoutes.use('/', route);
+  apiRoutes.use(route);
 });
 
 app.use('/api', apiRoutes);
 
+// Static files (should come after API routes)
+app.use('/uploads/announcements', express.static(path.join(__dirname, 'uploads/announcements')));
+
 // Health check endpoint
 app.get('/health', (req, res) => {
-  res.status(200).json({ status: 'healthy' });
+  res.status(200).json({ 
+    status: 'healthy',
+    timestamp: new Date().toISOString(),
+    environment: process.env.NODE_ENV || 'development'
+  });
 });
 
+// Debug route registration (remove in production)
+if (process.env.NODE_ENV !== 'production') {
+  console.log('\nRegistered routes:');
+  app._router.stack.forEach(middleware => {
+    if (middleware.route) {
+      console.log(`${Object.keys(middleware.route.methods)[0].toUpperCase()} ${middleware.route.path}`);
+    } else if (middleware.name === 'router') {
+      middleware.handle.stack.forEach(handler => {
+        if (handler.route) {
+          console.log(`${Object.keys(handler.route.methods)[0].toUpperCase()} /api${handler.route.path}`);
+        }
+      });
+    }
+  });
+  console.log('\n');
+}
+
 // 404 handler
-app.use((req, res, next) => {
-  res.status(404).json({ error: 'Not found' });
+app.use((req, res) => {
+  res.status(404).json({ 
+    error: 'Not found',
+    path: req.path,
+    method: req.method,
+    timestamp: new Date().toISOString()
+  });
 });
 
 // Error handler
 app.use((err, req, res, next) => {
-  console.error(err.stack);
-  res.status(500).json({ error: 'Something went wrong!' });
+  console.error('Error:', {
+    message: err.message,
+    stack: err.stack,
+    url: req.originalUrl,
+    method: req.method,
+    timestamp: new Date().toISOString()
+  });
+  
+  res.status(500).json({ 
+    error: 'Internal server error',
+    message: process.env.NODE_ENV === 'development' ? err.message : undefined,
+    timestamp: new Date().toISOString()
+  });
 });
 
 // Start server
 const server = app.listen(PORT, () => {
   console.log(`Server running on port ${PORT}`);
+  console.log(`Environment: ${process.env.NODE_ENV || 'development'}`);
+  console.log(`CORS allowed origin: ${process.env.FRONTEND_URL || 'http://localhost:3000'}`);
 });
 
 // Handle unhandled promise rejections
 process.on('unhandledRejection', (err) => {
-  console.error('Unhandled Rejection:', err);
+  console.error('Unhandled Rejection:', {
+    error: err.message,
+    stack: err.stack,
+    timestamp: new Date().toISOString()
+  });
   server.close(() => process.exit(1));
 });
 
 // Handle uncaught exceptions
 process.on('uncaughtException', (err) => {
-  console.error('Uncaught Exception:', err);
+  console.error('Uncaught Exception:', {
+    error: err.message,
+    stack: err.stack,
+    timestamp: new Date().toISOString()
+  });
   server.close(() => process.exit(1));
 });
 
-module.exports = server; // For testing
+module.exports = server;

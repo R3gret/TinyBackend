@@ -11,9 +11,10 @@ const loginLimiter = rateLimit({
   windowMs: 15 * 60 * 1000,
   max: 5,
   message: 'Too many login attempts, please try again later',
+  trustProxy: true, // Add this for proxy support
   keyGenerator: (req) => {
-    // Use X-Forwarded-For if behind proxy, otherwise use remoteAddress
-    return req.ip;
+    // Use x-forwarded-for header if present
+    return req.headers['x-forwarded-for'] || req.ip;
   }
 });
 
@@ -36,7 +37,7 @@ router.post('/login', loginLimiter, validateLogin, async (req, res) => {
 
   try {
     // Get connection with timeout handling
-    connection = await db.getConnection();
+    connection = await db.promisePool.getConnection();
     
     // Query with timeout
     const [results] = await connection.query({
