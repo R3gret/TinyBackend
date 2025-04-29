@@ -86,6 +86,31 @@ router.post('/', async (req, res) => {
   }
 });
 
+// Get user password (Note: This should be secured in production)
+router.get('/:id/password', async (req, res) => {
+  const { id } = req.params;
+  let connection;
+  
+  try {
+    connection = await db.promisePool.getConnection();
+    const [results] = await connection.query(
+      'SELECT password FROM users WHERE id = ?', 
+      [id]
+    );
+    
+    if (results.length === 0) {
+      return res.status(404).json({ error: 'User not found' });
+    }
+    
+    res.json({ password: results[0].password });
+  } catch (err) {
+    console.error('Database error:', err);
+    res.status(500).json({ error: 'Failed to fetch password' });
+  } finally {
+    if (connection) connection.release();
+  }
+});
+
 router.post('/user-info', [
   body('user_id').isInt().withMessage('Valid user ID required'),
   body('full_name').trim().isLength({ min: 2 }).withMessage('Full name must be at least 2 characters'),
@@ -159,31 +184,6 @@ router.post('/user-info', [
       message: err.message,
       error: process.env.NODE_ENV === 'development' ? err.message : undefined
     });
-  }
-});
-
-// Get user password (Note: This should be secured in production)
-router.get('/:id/password', async (req, res) => {
-  const { id } = req.params;
-  let connection;
-  
-  try {
-    connection = await db.promisePool.getConnection();
-    const [results] = await connection.query(
-      'SELECT password FROM users WHERE id = ?', 
-      [id]
-    );
-    
-    if (results.length === 0) {
-      return res.status(404).json({ error: 'User not found' });
-    }
-    
-    res.json({ password: results[0].password });
-  } catch (err) {
-    console.error('Database error:', err);
-    res.status(500).json({ error: 'Failed to fetch password' });
-  } finally {
-    if (connection) connection.release();
   }
 });
 
