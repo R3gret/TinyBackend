@@ -1,8 +1,9 @@
+// studentsRouter.js
 const express = require('express');
 const router = express.Router();
 const db = require('../db');
 
-router.get('/students', (req, res) => {
+router.get('/students', async (req, res) => {
   const { ageFilter } = req.query;
   
   let query = 'SELECT student_id, first_name, middle_name, last_name, birthdate, gender FROM students';
@@ -40,14 +41,10 @@ router.get('/students', (req, res) => {
     params.push(minDate.toISOString().split('T')[0], maxDate.toISOString().split('T')[0]);
   }
 
-  db.query(query, params, (err, results) => {
-    if (err) {
-      console.error('Database query error:', err);
-      return res.status(500).json({ 
-        success: false, 
-        message: 'Database error' 
-      });
-    }
+  let connection;
+  try {
+    connection = await db.promisePool.getConnection();
+    const [results] = await connection.query(query, params);
 
     // Calculate ages using the same method as frontend
     const studentsWithAge = results.map(student => {
@@ -83,7 +80,15 @@ router.get('/students', (req, res) => {
       success: true,
       students: studentsWithAge
     });
-  });
+  } catch (err) {
+    console.error('Database query error:', err);
+    return res.status(500).json({ 
+      success: false, 
+      message: 'Database error' 
+    });
+  } finally {
+    if (connection) connection.release();
+  }
 });
 
 module.exports = router;
