@@ -1,118 +1,10 @@
 const express = require('express');
 const router = express.Router();
-const db = require('../db'); // db should be created with mysql2.createConnection
+const db = require('../db');
 
-
-router.get('/structure', (req, res) => {
-  db.query(`
-    SELECT domain_id, item, domain_category 
-    FROM domains
-    ORDER BY domain_category, domain_id
-  `, (err, domainResults) => {
-    if (err) {
-      console.error('Error fetching domains:', err);
-      return res.status(500).json({ 
-        success: false, 
-        message: 'Failed to fetch domain structure', 
-        error: err.message 
-      });
-    }
-    
-    res.json({ 
-      success: true, 
-      data: groupDomains(domainResults, {}) 
-    });
-  });
-});
-
-
-router.get('/evaluations/check', (req, res) => {
-  console.log('Checking evaluation for:', req.query);
-  const { student_id, period } = req.query;
-
-  if (!student_id || !period) {
-    return res.status(400).json({
-      success: false,
-      message: 'Missing student_id or period parameter'
-    });
-  }
-
-  // Debug: Log the exact query being executed
-  const sql = `SELECT evaluation_id FROM evaluations WHERE student_id = ? AND evaluation_period = ?`;
-  console.log('Executing SQL:', sql, 'with params:', [student_id, period]);
-
-  db.query(sql, [student_id, period], (err, results) => {
-    console.log('Database returned:', { err, results }); // Debug database response
-    
-    if (err) {
-      console.error('Error checking evaluation:', err);
-      return res.status(500).json({ 
-        success: false,
-        exists: false,
-        message: 'Error checking evaluation'
-      });
-    }
-
-    // Debug: Verify results structure
-    console.log('Results length:', results.length);
-    console.log('First result:', results[0]);
-
-    res.json({ 
-      success: true,
-      exists: results.length > 0,
-      data: results.length > 0 ? results[0] : null // Return first result if exists
-    });
-  });
-});
-
-// GET all domains and items with their evaluation status for a specific student/period
-router.get('/', (req, res) => {
-  const { student_id, period } = req.query;
-
-  db.query(`
-    SELECT domain_id, item, domain_category 
-    FROM domains
-    ORDER BY domain_category, domain_id
-  `, (err, domainResults) => {
-    if (err) {
-      console.error('Error fetching domains:', err);
-      return res.status(500).json({ success: false, message: 'Failed to fetch domains', error: err.message });
-    }
-
-    if (student_id && period) {
-      db.query(`
-        SELECT ei.domain_id, ei.evaluation_value, ei.notes as item_notes,
-               e.notes as eval_notes, e.evaluator_id
-        FROM evaluation_items ei
-        JOIN evaluations e ON ei.evaluation_id = e.evaluation_id
-        WHERE e.student_id = ? AND e.evaluation_period = ?
-      `, [student_id, period], (err, evalResults) => {
-        if (err) {
-          console.error('Error fetching evaluations:', err);
-          return res.status(500).json({ success: false, message: 'Failed to fetch evaluations', error: err.message });
-        }
-
-        const evaluations = {};
-        evalResults.forEach(item => {
-          evaluations[item.domain_id] = {
-            value: item.evaluation_value,
-            item_notes: item.item_notes,
-            eval_notes: item.eval_notes,
-            evaluator_id: item.evaluator_id
-          };
-        });
-
-        return res.json({ success: true, data: groupDomains(domainResults, evaluations) });
-      });
-    } else {
-      return res.json({ success: true, data: groupDomains(domainResults, {}) });
-    }
-  });
-});
-
+// Helper function to group domains
 function groupDomains(domains, evaluations) {
   return domains.reduce((acc, item) => {
-    // Combine all "Self-Help" variations into one category
     const category = item.domain_category.toLowerCase().includes('self-help') 
       ? 'Self-Help' 
       : item.domain_category;
@@ -140,27 +32,132 @@ function groupDomains(domains, evaluations) {
   }, {});
 }
 
+// Get domain structure
+router.get('/structure', async (req, res) => {
+  let connection;
+  try {
+    connection = await db.promisePool.getConnection();
+    const [domainResults] = await connection.query(`
+      SELECT domain_id, item, domain_category 
+      FROM domains
+      ORDER BY domain_category, domain_id
+    `);
+    
+    res.json({ 
+      success: true, 
+      data: groupDomains(domainResults, {}) 
+    });
+  } catch (err) {
+    console.error('Error fetching domains:', err);
+    res.status(500).json({ 
+      success: false, 
+      message: 'Failed to fetch domain structure', 
+      error: err.message 
+    });
+  } finally {
+    if (connection) connection.release();
+  }
+});
 
+// Check if evaluation exists
+router.get('/evaluations/check', async (req, res) => {
+  const { student_id, period } = req.query;
 
-// Add this new route to your backend
-router.get('/evaluations/dates/:student_id', (req, res) => {
-  const { student_id } = req.params;
+  if (!student_id || !period) {
+    return res.status(400).json({
+      success: false,
+      message: 'Missing student_id or period parameter'
+    });
+  }
 
-  db.query(`
-    SELECT evaluation_period, evaluation_date 
-    FROM evaluations 
-    WHERE student_id = ?
-    ORDER BY evaluation_date ASC
-    LIMIT 3
-  `, [student_id], (err, results) => {
-    if (err) {
-      console.error('Error fetching evaluation dates:', err);
-      return res.status(500).json({ 
-        success: false, 
-        message: 'Failed to fetch evaluation dates', 
-        error: err.message 
+  let connection;
+  try {
+    connection = await db.promisePool.getConnection();
+    const [results] = await connection.query(
+      `SELECT evaluation_id FROM evaluations 
+       WHERE student_id = ? AND evaluation_period = ?`,
+      [student_id, period]
+    );
+    
+    res.json({ 
+      success: true,
+      exists: results.length > 0,
+      data: results.length > 0 ? results[0] : null
+    });
+  } catch (err) {
+    console.error('Error checking evaluation:', err);
+    res.status(500).json({ 
+      success: false,
+      exists: false,
+      message: 'Error checking evaluation'
+    });
+  } finally {
+    if (connection) connection.release();
+  }
+});
+
+// Get domains with evaluation status
+router.get('/', async (req, res) => {
+  const { student_id, period } = req.query;
+  let connection;
+
+  try {
+    connection = await db.promisePool.getConnection();
+    const [domainResults] = await connection.query(`
+      SELECT domain_id, item, domain_category 
+      FROM domains
+      ORDER BY domain_category, domain_id
+    `);
+
+    if (student_id && period) {
+      const [evalResults] = await connection.query(`
+        SELECT ei.domain_id, ei.evaluation_value, ei.notes as item_notes,
+               e.notes as eval_notes, e.evaluator_id
+        FROM evaluation_items ei
+        JOIN evaluations e ON ei.evaluation_id = e.evaluation_id
+        WHERE e.student_id = ? AND e.evaluation_period = ?
+      `, [student_id, period]);
+
+      const evaluations = {};
+      evalResults.forEach(item => {
+        evaluations[item.domain_id] = {
+          value: item.evaluation_value,
+          item_notes: item.item_notes,
+          eval_notes: item.eval_notes,
+          evaluator_id: item.evaluator_id
+        };
       });
+
+      res.json({ success: true, data: groupDomains(domainResults, evaluations) });
+    } else {
+      res.json({ success: true, data: groupDomains(domainResults, {}) });
     }
+  } catch (err) {
+    console.error('Error fetching domains:', err);
+    res.status(500).json({ 
+      success: false, 
+      message: 'Failed to fetch data', 
+      error: err.message 
+    });
+  } finally {
+    if (connection) connection.release();
+  }
+});
+
+// Get evaluation dates for a student
+router.get('/evaluations/dates/:student_id', async (req, res) => {
+  const { student_id } = req.params;
+  let connection;
+
+  try {
+    connection = await db.promisePool.getConnection();
+    const [results] = await connection.query(`
+      SELECT evaluation_period, evaluation_date 
+      FROM evaluations 
+      WHERE student_id = ?
+      ORDER BY evaluation_date ASC
+      LIMIT 3
+    `, [student_id]);
 
     const response = {
       firstEvaluation: results[0] || null,
@@ -169,35 +166,39 @@ router.get('/evaluations/dates/:student_id', (req, res) => {
     };
 
     res.json({ success: true, data: response });
-  });
+  } catch (err) {
+    console.error('Error fetching evaluation dates:', err);
+    res.status(500).json({ 
+      success: false, 
+      message: 'Failed to fetch evaluation dates', 
+      error: err.message 
+    });
+  } finally {
+    if (connection) connection.release();
+  }
 });
 
-router.get('/evaluations/scores/:student_id', (req, res) => {
+// Get evaluation scores for a student
+router.get('/evaluations/scores/:student_id', async (req, res) => {
   const { student_id } = req.params;
+  let connection;
 
-  db.query(`
-    SELECT 
-      d.domain_category,
-      e.evaluation_period,
-      COUNT(CASE WHEN ei.evaluation_value = 'yes' THEN 1 END) as yes_count,
-      COUNT(ei.evaluation_item_id) as total_items
-    FROM evaluations e
-    JOIN evaluation_items ei ON e.evaluation_id = ei.evaluation_id
-    JOIN domains d ON ei.domain_id = d.domain_id
-    WHERE e.student_id = ?
-    GROUP BY d.domain_category, e.evaluation_period
-    ORDER BY e.evaluation_period, d.domain_category
-  `, [student_id], (err, results) => {
-    if (err) {
-      console.error('Error fetching evaluation scores:', err);
-      return res.status(500).json({ 
-        success: false, 
-        message: 'Failed to fetch evaluation scores', 
-        error: err.message 
-      });
-    }
+  try {
+    connection = await db.promisePool.getConnection();
+    const [results] = await connection.query(`
+      SELECT 
+        d.domain_category,
+        e.evaluation_period,
+        COUNT(CASE WHEN ei.evaluation_value = 'yes' THEN 1 END) as yes_count,
+        COUNT(ei.evaluation_item_id) as total_items
+      FROM evaluations e
+      JOIN evaluation_items ei ON e.evaluation_id = ei.evaluation_id
+      JOIN domains d ON ei.domain_id = d.domain_id
+      WHERE e.student_id = ?
+      GROUP BY d.domain_category, e.evaluation_period
+      ORDER BY e.evaluation_period, d.domain_category
+    `, [student_id]);
 
-    // Organize the data by domain category and evaluation period
     const scoresByCategory = results.reduce((acc, row) => {
       if (!acc[row.domain_category]) {
         acc[row.domain_category] = {
@@ -227,18 +228,24 @@ router.get('/evaluations/scores/:student_id', (req, res) => {
       return acc;
     }, {});
 
-    console.log('Organized scores by category:', scoresByCategory);
-
     res.json({ success: true, data: scoresByCategory });
-  });
+  } catch (err) {
+    console.error('Error fetching evaluation scores:', err);
+    res.status(500).json({ 
+      success: false, 
+      message: 'Failed to fetch evaluation scores', 
+      error: err.message 
+    });
+  } finally {
+    if (connection) connection.release();
+  }
 });
 
-
-// POST new evaluation results
-router.post('/evaluations', (req, res) => {
+// Create new evaluation
+router.post('/evaluations', async (req, res) => {
   const { student_id, evaluation_period, evaluator_id, notes, items } = req.body;
+  let connection;
 
-  // Validate required fields
   if (!student_id || !evaluation_period) {
     return res.status(400).json({ 
       success: false, 
@@ -246,218 +253,116 @@ router.post('/evaluations', (req, res) => {
     });
   }
 
-  console.log('Received items count:', items?.length || 0);
-  console.log('Sample items:', items?.slice(0, 3));
+  try {
+    connection = await db.promisePool.getConnection();
+    await connection.beginTransaction();
 
-  // First check if evaluation already exists for this student and period
-  db.query(
-    `SELECT evaluation_id FROM evaluations 
-     WHERE student_id = ? AND evaluation_period = ?`,
-    [student_id, evaluation_period],
-    (err, results) => {
-      if (err) {
-        console.error('Error checking for existing evaluation:', err);
-        return res.status(500).json({ 
-          success: false, 
-          message: 'Failed to check for existing evaluation',
-          error: err.message 
-        });
-      }
+    // Check for existing evaluation
+    const [existing] = await connection.query(
+      `SELECT evaluation_id FROM evaluations 
+       WHERE student_id = ? AND evaluation_period = ?`,
+      [student_id, evaluation_period]
+    );
 
-      if (results.length > 0) {
-        return res.status(400).json({ 
-          success: false, 
-          message: 'Evaluation already exists for this student and period',
-          existingEvaluationId: results[0].evaluation_id
-        });
-      }
-
-      // Proceed with transaction if no duplicate found
-      db.beginTransaction(err => {
-        if (err) {
-          console.error('Error starting transaction:', err);
-          return res.status(500).json({ 
-            success: false, 
-            message: 'Failed to start transaction',
-            error: err.message 
-          });
-        }
-
-        // Insert evaluation header
-        db.query(
-          `INSERT INTO evaluations 
-          (student_id, evaluation_period, evaluator_id, notes) 
-          VALUES (?, ?, ?, ?)`,
-          [student_id, evaluation_period, evaluator_id, notes || null],
-          (err, evalResult) => {
-            if (err) {
-              return db.rollback(() => {
-                console.error('Error inserting evaluation:', err);
-                res.status(500).json({ 
-                  success: false, 
-                  message: 'Failed to save evaluation',
-                  error: err.message 
-                });
-              });
-            }
-
-            const evaluation_id = evalResult.insertId;
-            
-            // Check if there are items to insert
-            if (!items || items.length === 0) {
-              console.log('No items to insert');
-              return db.commit(err => {
-                if (err) {
-                  return db.rollback(() => {
-                    console.error('Error committing transaction:', err);
-                    res.status(500).json({ 
-                      success: false, 
-                      message: 'Transaction commit failed',
-                      error: err.message 
-                    });
-                  });
-                }
-                res.json({ 
-                  success: true, 
-                  evaluation_id, 
-                  message: 'Evaluation saved successfully (no items)' 
-                });
-              });
-            }
-
-            // Prepare items for batch insert with strict validation
-            const insertItems = items
-              .filter(item => {
-                const isValid = (
-                  item.domain_id && 
-                  item.evaluation_value !== undefined && 
-                  item.evaluation_value !== null
-                );
-                if (!isValid) {
-                  console.warn('Invalid item filtered out:', item);
-                }
-                return isValid;
-              })
-              .map(item => [
-                evaluation_id, 
-                item.domain_id, 
-                item.evaluation_value, 
-                item.notes || null
-              ]);
-
-            console.log('Valid items to insert:', insertItems.length);
-
-            // Skip if no valid items after filtering
-            if (insertItems.length === 0) {
-              console.log('No valid items after filtering');
-              return db.commit(err => {
-                if (err) {
-                  return db.rollback(() => {
-                    console.error('Error committing transaction:', err);
-                    res.status(500).json({ 
-                      success: false, 
-                      message: 'Transaction commit failed',
-                      error: err.message 
-                    });
-                  });
-                }
-                res.json({ 
-                  success: true, 
-                  evaluation_id, 
-                  message: 'Evaluation saved successfully (no valid items)' 
-                });
-              });
-            }
-
-            // Insert evaluation items
-            const query = `
-              INSERT INTO evaluation_items 
-              (evaluation_id, domain_id, evaluation_value, notes) 
-              VALUES ?
-            `;
-
-            db.query(query, [insertItems], (err, result) => {
-              if (err) {
-                return db.rollback(() => {
-                  console.error('Error inserting evaluation items:', err);
-                  res.status(500).json({ 
-                    success: false, 
-                    message: 'Failed to save evaluation items',
-                    error: err.message 
-                  });
-                });
-              }
-
-              console.log('Items successfully inserted:', result.affectedRows);
-
-              db.commit(err => {
-                if (err) {
-                  return db.rollback(() => {
-                    console.error('Error committing transaction:', err);
-                    res.status(500).json({ 
-                      success: false, 
-                      message: 'Transaction commit failed',
-                      error: err.message 
-                    });
-                  });
-                }
-
-                res.json({ 
-                  success: true, 
-                  evaluation_id, 
-                  itemsInserted: insertItems.length,
-                  message: 'Evaluation saved successfully' 
-                });
-              });
-            });
-          }
-        );
+    if (existing.length > 0) {
+      return res.status(400).json({ 
+        success: false, 
+        message: 'Evaluation already exists for this student and period',
+        existingEvaluationId: existing[0].evaluation_id
       });
     }
-  );
+
+    // Insert evaluation header
+    const [evalResult] = await connection.query(
+      `INSERT INTO evaluations 
+      (student_id, evaluation_period, evaluator_id, notes) 
+      VALUES (?, ?, ?, ?)`,
+      [student_id, evaluation_period, evaluator_id, notes || null]
+    );
+
+    const evaluation_id = evalResult.insertId;
+    
+    // Insert items if they exist
+    if (items && items.length > 0) {
+      const insertItems = items
+        .filter(item => (
+          item.domain_id && 
+          item.evaluation_value !== undefined && 
+          item.evaluation_value !== null
+        ))
+        .map(item => [
+          evaluation_id, 
+          item.domain_id, 
+          item.evaluation_value, 
+          item.notes || null
+        ]);
+
+      if (insertItems.length > 0) {
+        await connection.query(
+          `INSERT INTO evaluation_items 
+          (evaluation_id, domain_id, evaluation_value, notes) 
+          VALUES ?`,
+          [insertItems]
+        );
+      }
+    }
+
+    await connection.commit();
+    res.json({ 
+      success: true, 
+      evaluation_id, 
+      message: 'Evaluation saved successfully' 
+    });
+  } catch (err) {
+    if (connection) await connection.rollback();
+    console.error('Error saving evaluation:', err);
+    res.status(500).json({ 
+      success: false, 
+      message: 'Failed to save evaluation',
+      error: err.message 
+    });
+  } finally {
+    if (connection) connection.release();
+  }
 });
 
-// GET evaluations for a student
-router.get('/evaluations/:student_id', (req, res) => {
+// Get evaluations for a student
+router.get('/evaluations/:student_id', async (req, res) => {
   const { student_id } = req.params;
   const { period } = req.query;
+  let connection;
 
-  let query = `
-    SELECT 
-      e.evaluation_id, 
-      e.evaluation_period, 
-      e.evaluation_date,
-      e.evaluator_id,
-      e.notes as evaluation_notes,
-      ei.evaluation_item_id, 
-      ei.domain_id, 
-      ei.evaluation_value,
-      ei.notes as item_notes,
-      d.item, 
-      d.domain_category
-    FROM evaluations e
-    JOIN evaluation_items ei ON e.evaluation_id = ei.evaluation_id
-    JOIN domains d ON ei.domain_id = d.domain_id
-    WHERE e.student_id = ?
-  `;
-  const params = [student_id];
+  try {
+    connection = await db.promisePool.getConnection();
+    
+    let query = `
+      SELECT 
+        e.evaluation_id, 
+        e.evaluation_period, 
+        e.evaluation_date,
+        e.evaluator_id,
+        e.notes as evaluation_notes,
+        ei.evaluation_item_id, 
+        ei.domain_id, 
+        ei.evaluation_value,
+        ei.notes as item_notes,
+        d.item, 
+        d.domain_category
+      FROM evaluations e
+      JOIN evaluation_items ei ON e.evaluation_id = ei.evaluation_id
+      JOIN domains d ON ei.domain_id = d.domain_id
+      WHERE e.student_id = ?
+    `;
+    const params = [student_id];
 
-  if (period) {
-    query += ' AND e.evaluation_period = ?';
-    params.push(period);
-  }
-
-  query += ' ORDER BY e.evaluation_date DESC, d.domain_category';
-
-  db.query(query, params, (err, results) => {
-    if (err) {
-      console.error('Error fetching evaluations:', err);
-      return res.status(500).json({ 
-        success: false, 
-        message: 'Failed to fetch evaluations', 
-        error: err.message 
-      });
+    if (period) {
+      query += ' AND e.evaluation_period = ?';
+      params.push(period);
     }
+
+    query += ' ORDER BY e.evaluation_date DESC, d.domain_category';
+
+    const [results] = await connection.query(query, params);
 
     const grouped = results.reduce((acc, row) => {
       const evalPeriod = row.evaluation_period;
@@ -483,58 +388,62 @@ router.get('/evaluations/:student_id', (req, res) => {
     }, {});
 
     res.json({ success: true, data: grouped });
-  });
+  } catch (err) {
+    console.error('Error fetching evaluations:', err);
+    res.status(500).json({ 
+      success: false, 
+      message: 'Failed to fetch evaluations', 
+      error: err.message 
+    });
+  } finally {
+    if (connection) connection.release();
+  }
 });
 
-// GET single evaluation by ID
-router.get('/evaluations/single/:evaluation_id', (req, res) => {
+// Get single evaluation by ID
+router.get('/evaluations/single/:evaluation_id', async (req, res) => {
   const { evaluation_id } = req.params;
+  let connection;
 
-  db.query(
-    `SELECT * FROM evaluations WHERE evaluation_id = ?`, 
-    [evaluation_id], 
-    (err, evalResult) => {
-      if (err) {
-        console.error('Error fetching evaluation:', err);
-        return res.status(500).json({ 
-          success: false, 
-          message: 'Failed to fetch evaluation', 
-          error: err.message 
-        });
-      }
+  try {
+    connection = await db.promisePool.getConnection();
+    
+    const [evalResults] = await connection.query(
+      `SELECT * FROM evaluations WHERE evaluation_id = ?`, 
+      [evaluation_id]
+    );
 
-      if (!evalResult.length) {
-        return res.status(404).json({ 
-          success: false, 
-          message: 'Evaluation not found' 
-        });
-      }
-
-      db.query(`
-        SELECT ei.*, d.item, d.domain_category
-        FROM evaluation_items ei
-        JOIN domains d ON ei.domain_id = d.domain_id
-        WHERE ei.evaluation_id = ?
-      `, [evaluation_id], (err, itemResults) => {
-        if (err) {
-          console.error('Error fetching evaluation items:', err);
-          return res.status(500).json({ 
-            success: false, 
-            message: 'Failed to fetch evaluation items', 
-            error: err.message 
-          });
-        }
-
-        res.json({
-          success: true,
-          data: {
-            ...evalResult[0],
-            items: itemResults
-          }
-        });
+    if (evalResults.length === 0) {
+      return res.status(404).json({ 
+        success: false, 
+        message: 'Evaluation not found' 
       });
     }
-  );
+
+    const [itemResults] = await connection.query(`
+      SELECT ei.*, d.item, d.domain_category
+      FROM evaluation_items ei
+      JOIN domains d ON ei.domain_id = d.domain_id
+      WHERE ei.evaluation_id = ?
+    `, [evaluation_id]);
+
+    res.json({
+      success: true,
+      data: {
+        ...evalResults[0],
+        items: itemResults
+      }
+    });
+  } catch (err) {
+    console.error('Error fetching evaluation:', err);
+    res.status(500).json({ 
+      success: false, 
+      message: 'Failed to fetch evaluation', 
+      error: err.message 
+    });
+  } finally {
+    if (connection) connection.release();
+  }
 });
 
 module.exports = router;
