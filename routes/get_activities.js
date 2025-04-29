@@ -2,15 +2,23 @@ const express = require('express');
 const router = express.Router();
 const db = require('../db');
 
-// GET /api/get_activities?date=YYYY-MM-DD
 router.get('/', async (req, res) => {
   const { date } = req.query;
   let connection;
+
+  // Input validation
+  if (!date || !date.match(/^\d{4}-\d{2}-\d{2}$/)) {
+    return res.status(400).json({ 
+      success: false, 
+      message: 'Date parameter is required in YYYY-MM-DD format' 
+    });
+  }
 
   console.log(`Fetching activities for date: ${date}`);
 
   try {
     connection = await db.promisePool.getConnection();
+    await connection.ping(); // Verify connection
     
     const query = `
       SELECT a.* 
@@ -27,10 +35,11 @@ router.get('/', async (req, res) => {
       activities: results
     });
   } catch (err) {
-    console.error('Error fetching activities:', err);
+    console.error('Database error:', err);
     res.status(500).json({ 
       success: false, 
-      message: 'Failed to fetch activities' 
+      message: 'Database error while fetching activities',
+      error: err.message
     });
   } finally {
     if (connection) connection.release();
