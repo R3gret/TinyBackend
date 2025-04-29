@@ -4,7 +4,7 @@ const router = express.Router();
 const db = require('../db');
 
 // Get all users
-router.get('/users', async (req, res) => {
+router.get('/', async (req, res) => {
   let connection;
   try {
     connection = await db.promisePool.getConnection();
@@ -19,7 +19,7 @@ router.get('/users', async (req, res) => {
 });
 
 // Search users
-router.get('/users/search', async (req, res) => {
+router.get('/search', async (req, res) => {
   const { query } = req.query;
   let connection;
   try {
@@ -38,7 +38,7 @@ router.get('/users/search', async (req, res) => {
 });
 
 // Create user with hashed password
-router.post('/users', async (req, res) => {
+router.post('/', async (req, res) => {
   const { username, password, type = 'user' } = req.body;
   let connection;
 
@@ -86,39 +86,8 @@ router.post('/users', async (req, res) => {
   }
 });
 
-// Add user info
-router.post('/user-info', async (req, res) => {
-  const {
-    user_id,
-    full_name,
-    email,
-    phone,
-    address,
-    organization,
-    website,
-    social_media
-  } = req.body;
-  
-  let connection;
-  try {
-    connection = await db.promisePool.getConnection();
-    const [result] = await connection.query(
-      `INSERT INTO user_other_info 
-      (user_id, full_name, email, phone, address, organization, website, social_media) 
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
-      [user_id, full_name, email, phone, address, organization, website, social_media]
-    );
-    res.status(201).json({ success: true });
-  } catch (err) {
-    console.error('Database error:', err);
-    res.status(500).json({ error: 'Failed to save user info' });
-  } finally {
-    if (connection) connection.release();
-  }
-});
-
 // Get user password (Note: This should be secured in production)
-router.get('/users/:id/password', async (req, res) => {
+router.get('/:id/password', async (req, res) => {
   const { id } = req.params;
   let connection;
   
@@ -143,7 +112,7 @@ router.get('/users/:id/password', async (req, res) => {
 });
 
 // Delete user account
-router.delete('/users/:id', async (req, res) => {
+router.delete('/:id', async (req, res) => {
   const { id } = req.params;
   let connection;
 
@@ -168,7 +137,7 @@ router.delete('/users/:id', async (req, res) => {
 });
 
 // Edit user account with secure password handling
-router.put('/users/:id', async (req, res) => {
+router.put('/:id', async (req, res) => {
   const { id } = req.params;
   const { username, password, type } = req.body;
   let connection;
@@ -237,5 +206,41 @@ router.put('/users/:id', async (req, res) => {
     if (connection) connection.release();
   }
 });
+
+// User info routes (separate endpoint)
+const userInfoRouter = express.Router();
+
+userInfoRouter.post('/', async (req, res) => {
+  const {
+    user_id,
+    full_name,
+    email,
+    phone,
+    address,
+    organization,
+    website,
+    social_media
+  } = req.body;
+  
+  let connection;
+  try {
+    connection = await db.promisePool.getConnection();
+    const [result] = await connection.query(
+      `INSERT INTO user_other_info 
+      (user_id, full_name, email, phone, address, organization, website, social_media) 
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+      [user_id, full_name, email, phone, address, organization, website, social_media]
+    );
+    res.status(201).json({ success: true });
+  } catch (err) {
+    console.error('Database error:', err);
+    res.status(500).json({ error: 'Failed to save user info' });
+  } finally {
+    if (connection) connection.release();
+  }
+});
+
+// Mount user info routes under /info
+router.use('/:userId/info', userInfoRouter);
 
 module.exports = router;
