@@ -116,7 +116,7 @@ router.delete('/:id', async (req, res) => {
 });
 
 // Get all user types (distinct values from the type column)
-router.get('/types/all', async (req, res) => {
+router.get('/api/account/types/all', async (req, res) => {
   try {
     const [results] = await db.promisePool.query('SELECT DISTINCT type FROM users');
 
