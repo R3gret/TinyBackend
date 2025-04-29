@@ -2,7 +2,7 @@ const express = require('express');
 const router = express.Router();
 const db = require('../db');
 
-router.post('/add_activity', async (req, res) => {
+router.post('/', async (req, res) => {
   const { date, activities } = req.body;
   let connection;
 
