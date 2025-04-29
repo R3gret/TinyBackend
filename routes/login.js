@@ -50,14 +50,7 @@ router.post('/login', loginLimiter, validateLogin, async (req, res) => {
     }
 
     const user = results[0];
-    
-    // TEMPORARY: Plain text password comparison
-    // =========================================
-    // COMMENT OUT THE BELOW LINE WHEN REVERTING TO BCRYPT
-    const isMatch = password === user.password;
-    
-    // UNCOMMENT THE BELOW BLOCK WHEN REVERTING TO BCRYPT
-    /*
+
     const isMatch = await bcrypt.compare(password, user.password);
     if (!isMatch) {
       return res.status(401).json({ 
@@ -65,8 +58,6 @@ router.post('/login', loginLimiter, validateLogin, async (req, res) => {
         message: 'Invalid credentials' 
       });
     }
-    */
-    // =========================================
 
     if (!isMatch) {
       return res.status(401).json({ 
