@@ -17,7 +17,7 @@ router.post('/', async (req, res) => {
 
     // Step 1: Check if a plan already exists for the given date
     const [planResults] = await connection.query(
-      'SELECT plan_id FROM weekly_plans WHERE date_of_week = ?', 
+      'SELECT plan_id FROM weekly_plans WHERE date = ?', 
       [date]
     );
 
