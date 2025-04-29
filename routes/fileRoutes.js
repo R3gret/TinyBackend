@@ -44,15 +44,22 @@ router.get('/categories', async (req, res) => {
 });
 
 // GET /api/age-groups - Returns all age groups
+// In your backend route handler for age-groups
 router.get('/age-groups', async (req, res) => {
   let connection;
   try {
     connection = await db.promisePool.getConnection();
     const [results] = await connection.query('SELECT * FROM age_groups');
     
+    // Format the age ranges properly
+    const formattedResults = results.map(group => ({
+      ...group,
+      age_range: group.age_range.replace(/\?/g, '-') // Replace any question marks with hyphens
+    }));
+    
     return res.json({
       success: true,
-      ageGroups: results
+      ageGroups: formattedResults
     });
   } catch (err) {
     console.error('Database query error:', err);
