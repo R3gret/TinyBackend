@@ -47,7 +47,7 @@ app.use('/api/users', require('./routes/users'));
 app.use('/api/account', require('./routes/account')); // This will properly mount account routes
 app.use('/api/user_session', require('./routes/user_session'));
 app.use('/api/domains', require('./routes/domains'));
-app.use('/api/uploads', require('./routes/fileRoutes'));
+app.use('/api/files', require('./routes/fileRoutes'));
 app.use('/api/announcement', require('./routes/announcement'));
 
 // Static files
