@@ -76,6 +76,7 @@ router.post('/', [
 });
 
 // Bulk insert attendance records
+// In your backend attendance route file
 router.post('/bulk', [
   body().isArray(),
   body('*.student_id').isInt(),
@@ -87,7 +88,7 @@ router.post('/bulk', [
     return res.status(400).json({ success: false, errors: errors.array() });
   }
 
-  const attendanceRecords = req.body;
+  const attendanceRecords = req.body; // Directly use the array
   let connection;
 
   try {
