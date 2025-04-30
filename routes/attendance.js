@@ -4,7 +4,7 @@ const db = require('../db');
 const { body, validationResult } = require('express-validator');
 
 // Insert attendance record with status
-router.post('/attendance', [
+router.post('/', [
   body('student_id').isInt().withMessage('Student ID must be an integer'),
   body('attendance_date').isISO8601().withMessage('Invalid date format (YYYY-MM-DD)'),
   body('status').isIn(['Present', 'Absent', 'Late', 'Excused']).withMessage('Invalid status')
