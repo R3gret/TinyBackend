@@ -10,7 +10,7 @@ router.get('/', async (req, res) => {
   const params = [];
   
   if (ageFilter) {
-    // Calculate date ranges based on age filter using native Date
+    // Calculate date ranges based on age filter using native Dates
     const today = new Date();
     let minDate, maxDate;
     
