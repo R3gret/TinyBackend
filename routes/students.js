@@ -154,4 +154,65 @@ router.get('/gender-distribution', async (req, res) => {
   }
 });
 
+
+// Add this new route to your students router
+router.get('/enrollment-stats', async (req, res) => {
+  let connection;
+  try {
+    connection = await db.promisePool.getConnection();
+    
+    // Get current month stats
+    const currentMonth = new Date().getMonth() + 1;
+    const currentYear = new Date().getFullYear();
+    
+    // Get last month stats (handle year transition)
+    let lastMonth = currentMonth - 1;
+    let lastYear = currentYear;
+    if (lastMonth === 0) {
+      lastMonth = 12;
+      lastYear = currentYear - 1;
+    }
+    
+    // Query for current month enrollments
+    const [currentMonthResults] = await connection.query(
+      `SELECT COUNT(*) as count 
+       FROM students 
+       WHERE MONTH(enrolled_at) = ? AND YEAR(enrolled_at) = ?`,
+      [currentMonth, currentYear]
+    );
+    
+    // Query for last month enrollments
+    const [lastMonthResults] = await connection.query(
+      `SELECT COUNT(*) as count 
+       FROM students 
+       WHERE MONTH(enrolled_at) = ? AND YEAR(enrolled_at) = ?`,
+      [lastMonth, lastYear]
+    );
+    
+    // Query for total students
+    const [totalResults] = await connection.query(
+      `SELECT COUNT(*) as total FROM students`
+    );
+    
+    return res.json({
+      success: true,
+      stats: {
+        total: totalResults[0].total,
+        currentMonth: currentMonthResults[0].count,
+        lastMonth: lastMonthResults[0].count,
+        difference: currentMonthResults[0].count - lastMonthResults[0].count
+      }
+    });
+    
+  } catch (err) {
+    console.error('Database query error:', err);
+    return res.status(500).json({ 
+      success: false, 
+      message: 'Database error' 
+    });
+  } finally {
+    if (connection) connection.release();
+  }
+});
+
 module.exports = router;
