@@ -189,7 +189,7 @@ router.get('/enrollment-stats', async (req, res) => {
       [lastMonth, lastYear]
     );
     
-    // Query for total students
+    // Query for total students (all months)
     const [totalResults] = await connection.query(
       `SELECT COUNT(*) as total FROM students`
     );
@@ -197,10 +197,10 @@ router.get('/enrollment-stats', async (req, res) => {
     return res.json({
       success: true,
       stats: {
-        total: totalResults[0].total,
-        currentMonth: currentMonthResults[0].count,
-        lastMonth: lastMonthResults[0].count,
-        difference: currentMonthResults[0].count - lastMonthResults[0].count
+        total: totalResults[0].total, // All students
+        currentMonthEnrollments: currentMonthResults[0].count, // Just this month's new students
+        lastMonthEnrollments: lastMonthResults[0].count, // Just last month's new students
+        difference: currentMonthResults[0].count - lastMonthResults[0].count // Comparison
       }
     });
     
@@ -214,5 +214,4 @@ router.get('/enrollment-stats', async (req, res) => {
     if (connection) connection.release();
   }
 });
-
 module.exports = router;
