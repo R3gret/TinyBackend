@@ -83,9 +83,16 @@ router.post('/', loginLimiter, validateLogin, async (req, res) => {
       maxAge: 3600000
     });
 
+    // Also return the token in response for localStorage
     return res.json({
       success: true,
-      user: { id: user.id, username: user.username, type: user.type }
+      token, // Send token in response body
+      expiresIn: 3600, // 1 hour in seconds
+      user: { 
+        id: user.id, 
+        username: user.username, 
+        type: user.type 
+      }
     });
 
   } catch (error) {
