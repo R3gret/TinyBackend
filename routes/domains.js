@@ -500,8 +500,8 @@ router.get('/evaluations/average-progress', async (req, res) => {
 
     // Calculate totals
     const totals = domainResults.reduce((acc, row) => ({
-      totalMastered: acc.totalMastered + row.mastered,
-      totalItems: acc.totalItems + row.total
+      totalMastered: acc.totalMastered + (row.mastered || 0),
+      totalItems: acc.totalItems + (row.total || 0)
     }), { totalMastered: 0, totalItems: 0 });
 
     const averageProgress = totals.totalItems > 0 
@@ -510,7 +510,7 @@ router.get('/evaluations/average-progress', async (req, res) => {
 
     res.json({
       success: true,
-      stats: {
+      stats: {  // Changed from 'data' to 'stats' to match frontend expectation
         averageProgress,
         totalMastered: totals.totalMastered,
         totalItems: totals.totalItems,
