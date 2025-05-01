@@ -446,4 +446,75 @@ router.get('/evaluations/single/:evaluation_id', async (req, res) => {
   }
 });
 
+// Add this to your domains router file
+router.get('/evaluations/average-progress', async (req, res) => {
+  let connection;
+  try {
+    connection = await db.promisePool.getConnection();
+
+    // Get latest evaluation scores for all students across all domains
+    const [results] = await connection.query(`
+      WITH LatestEvaluations AS (
+        SELECT 
+          e.student_id,
+          e.evaluation_period,
+          e.evaluation_date,
+          ROW_NUMBER() OVER (PARTITION BY e.student_id ORDER BY e.evaluation_date DESC) as rn
+        FROM evaluations e
+      )
+      SELECT 
+        d.domain_category,
+        COUNT(CASE WHEN ei.evaluation_value = 'yes' THEN 1 END) as mastered_count,
+        COUNT(ei.evaluation_item_id) as total_items
+      FROM LatestEvaluations le
+      JOIN evaluations e ON le.student_id = e.student_id AND le.evaluation_period = e.evaluation_period
+      JOIN evaluation_items ei ON e.evaluation_id = ei.evaluation_id
+      JOIN domains d ON ei.domain_id = d.domain_id
+      WHERE le.rn = 1
+      GROUP BY d.domain_category
+    `);
+
+    // Calculate overall average progress
+    let totalMastered = 0;
+    let totalItems = 0;
+    
+    const domainProgress = results.map(row => {
+      const progress = row.total_items > 0 
+        ? Math.round((row.mastered_count / row.total_items) * 100)
+        : 0;
+      
+      totalMastered += row.mastered_count;
+      totalItems += row.total_items;
+      
+      return {
+        domain: row.domain_category,
+        progress: progress
+      };
+    });
+
+    const averageProgress = totalItems > 0 
+      ? Math.round((totalMastered / totalItems) * 100)
+      : 0;
+
+    res.json({
+      success: true,
+      stats: {
+        averageProgress: averageProgress,
+        totalMastered: totalMastered,
+        totalItems: totalItems,
+        domains: domainProgress
+      }
+    });
+
+  } catch (err) {
+    console.error('Database error:', err);
+    res.status(500).json({ 
+      success: false, 
+      message: 'Database error' 
+    });
+  } finally {
+    if (connection) connection.release();
+  }
+});
+
 module.exports = router;
