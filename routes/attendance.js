@@ -178,7 +178,7 @@ router.get('/stats', async (req, res) => {
   try {
     connection = await db.promisePool.getConnection();
 
-    // Get total attendance records
+    // Get total attendance recordss
     const [totalResults] = await connection.query(
       `SELECT COUNT(*) as total FROM attendance`
     );
