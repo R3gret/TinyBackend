@@ -460,27 +460,45 @@ router.get('/evaluations/average-progress', async (req, res) => {
           ROW_NUMBER() OVER (PARTITION BY e.student_id ORDER BY e.evaluation_date DESC) as rn
         FROM evaluations e
       ),
-      DomainResults AS (
+      CategorizedDomains AS (
         SELECT
-          d.domain_category as domain,
-          COUNT(CASE WHEN ei.evaluation_value = 'yes' THEN 1 END) as mastered,
-          COUNT(ei.evaluation_item_id) as total
+          domain_id,
+          item,
+          CASE 
+            WHEN domain_category LIKE 'Self-Help%' THEN 'Self-Help'
+            WHEN INSTR(domain_category, ':') > 0 THEN SUBSTRING(domain_category, 1, INSTR(domain_category, ':')-1)
+            ELSE domain_category
+          END as base_category
+        FROM domains
+      ),
+      MasteredItems AS (
+        SELECT
+          cd.base_category,
+          COUNT(DISTINCT cd.domain_id) as mastered_count
         FROM LatestEvaluations le
         JOIN evaluation_items ei ON le.evaluation_id = ei.evaluation_id
-        JOIN domains d ON ei.domain_id = d.domain_id
-        WHERE le.rn = 1
-        GROUP BY d.domain_category
+        JOIN CategorizedDomains cd ON ei.domain_id = cd.domain_id
+        WHERE le.rn = 1 AND ei.evaluation_value = 'yes'
+        GROUP BY cd.base_category
+      ),
+      TotalItems AS (
+        SELECT
+          base_category,
+          COUNT(domain_id) as total_count
+        FROM CategorizedDomains
+        GROUP BY base_category
       )
       SELECT
-        domain,
-        ROUND((mastered * 100.0 / NULLIF(total, 0)), 0) as progress,
-        mastered,
-        total
-      FROM DomainResults
-      ORDER BY domain;
+        t.base_category as domain,
+        ROUND((COALESCE(m.mastered_count, 0) * 100.0 / NULLIF(t.total_count, 0)), 0) as progress,
+        COALESCE(m.mastered_count, 0) as mastered,
+        t.total_count as total
+      FROM TotalItems t
+      LEFT JOIN MasteredItems m ON t.base_category = m.base_category
+      ORDER BY t.base_category;
     `);
 
-    // Calculate totals from actual data
+    // Calculate totals
     const totals = domainResults.reduce((acc, row) => ({
       totalMastered: acc.totalMastered + row.mastered,
       totalItems: acc.totalItems + row.total
@@ -496,12 +514,7 @@ router.get('/evaluations/average-progress', async (req, res) => {
         averageProgress,
         totalMastered: totals.totalMastered,
         totalItems: totals.totalItems,
-        domains: domainResults.map(row => ({
-          domain: row.domain.split(' / ')[0].trim(), // Use English part only
-          progress: row.progress,
-          mastered: row.mastered,
-          total: row.total
-        }))
+        domains: domainResults
       }
     });
 
