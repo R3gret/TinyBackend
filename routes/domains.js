@@ -508,15 +508,16 @@ router.get('/evaluations/average-progress', async (req, res) => {
       ? Math.round((totals.totalMastered / totals.totalItems) * 100)
       : 0;
 
-    res.json({
-      success: true,
-      stats: {  // Changed from 'data' to 'stats' to match frontend expectation
-        averageProgress,
-        totalMastered: totals.totalMastered,
-        totalItems: totals.totalItems,
-        domains: domainResults
-      }
-    });
+    // In your backend route handler
+res.json({
+  success: true,
+  stats: {  // Changed from 'data' to 'stats'
+    averageProgress: calculatedAverage || 0,
+    totalMastered: totalMastered || 0,
+    totalItems: totalItems || 0,
+    domains: domainsData || []
+  }
+});
 
   } catch (err) {
     console.error('Database error:', err);
