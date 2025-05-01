@@ -453,45 +453,42 @@ router.get('/evaluations/average-progress', async (req, res) => {
     connection = await db.promisePool.getConnection();
     
     const [domainResults] = await connection.query(`
-      WITH LatestEvaluations AS (...)
-      /* Use the SQL query above */
+      WITH LatestEvaluations AS (
+        SELECT 
+          e.student_id,
+          e.evaluation_id,
+          ROW_NUMBER() OVER (PARTITION BY e.student_id ORDER BY e.evaluation_date DESC) as rn
+        FROM evaluations e
+      ),
+      DomainResults AS (
+        SELECT
+          d.domain_category as domain,
+          COUNT(CASE WHEN ei.evaluation_value = 'yes' THEN 1 END) as mastered,
+          COUNT(ei.evaluation_item_id) as total
+        FROM LatestEvaluations le
+        JOIN evaluation_items ei ON le.evaluation_id = ei.evaluation_id
+        JOIN domains d ON ei.domain_id = d.domain_id
+        WHERE le.rn = 1
+        GROUP BY d.domain_category
+      )
+      SELECT
+        domain,
+        ROUND((mastered * 100.0 / NULLIF(total, 0)), 0) as progress,
+        mastered,
+        total
+      FROM DomainResults
+      ORDER BY domain;
     `);
 
-    // Calculate totals
-    const totals = domainResults.reduce((acc, row) => {
-      acc.totalMastered += row.mastered;
-      acc.totalItems += row.total;
-      return acc;
-    }, { totalMastered: 0, totalItems: 0 });
+    // Calculate totals from actual data
+    const totals = domainResults.reduce((acc, row) => ({
+      totalMastered: acc.totalMastered + row.mastered,
+      totalItems: acc.totalItems + row.total
+    }), { totalMastered: 0, totalItems: 0 });
 
     const averageProgress = totals.totalItems > 0 
       ? Math.round((totals.totalMastered / totals.totalItems) * 100)
       : 0;
-
-    // Group similar domains (e.g., all language domains together)
-    const groupedDomains = domainResults.reduce((acc, row) => {
-      const category = row.domain.includes('Language') ? 'Language' :
-                      row.domain.includes('Motor') ? 'Motor' :
-                      row.domain.includes('Social') ? 'Social' :
-                      row.domain.split(' / ')[0]; // Use the part before " / "
-      
-      if (!acc[category]) {
-        acc[category] = { mastered: 0, total: 0 };
-      }
-      
-      acc[category].mastered += row.mastered;
-      acc[category].total += row.total;
-      
-      return acc;
-    }, {});
-
-    // Format for response
-    const domains = Object.entries(groupedDomains).map(([name, stats]) => ({
-      domain: name,
-      progress: stats.total > 0 ? Math.round((stats.mastered / stats.total) * 100) : 0,
-      mastered: stats.mastered,
-      total: stats.total
-    }));
 
     res.json({
       success: true,
@@ -499,7 +496,12 @@ router.get('/evaluations/average-progress', async (req, res) => {
         averageProgress,
         totalMastered: totals.totalMastered,
         totalItems: totals.totalItems,
-        domains
+        domains: domainResults.map(row => ({
+          domain: row.domain.split(' / ')[0].trim(), // Use English part only
+          progress: row.progress,
+          mastered: row.mastered,
+          total: row.total
+        }))
       }
     });
 
