@@ -172,4 +172,47 @@ router.get('/', async (req, res) => {
   }
 });
 
+// Add this to your attendance router file
+router.get('/stats', async (req, res) => {
+  let connection;
+  try {
+    connection = await db.promisePool.getConnection();
+
+    // Get total attendance records
+    const [totalResults] = await connection.query(
+      `SELECT COUNT(*) as total FROM attendance`
+    );
+
+    // Get present records (count Present and Late as present)
+    const [presentResults] = await connection.query(
+      `SELECT COUNT(*) as present 
+       FROM attendance 
+       WHERE status IN ('Present', 'Late')`
+    );
+
+    // Calculate percentage
+    const attendanceRate = totalResults[0].total > 0 
+      ? Math.round((presentResults[0].present / totalResults[0].total) * 100)
+      : 0;
+
+    res.json({
+      success: true,
+      stats: {
+        totalRecords: totalResults[0].total,
+        presentRecords: presentResults[0].present,
+        attendanceRate: attendanceRate
+      }
+    });
+
+  } catch (err) {
+    console.error('Database error:', err);
+    res.status(500).json({ 
+      success: false, 
+      message: 'Database error' 
+    });
+  } finally {
+    if (connection) connection.release();
+  }
+});
+
 module.exports = router;
