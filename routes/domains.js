@@ -451,58 +451,55 @@ router.get('/evaluations/average-progress', async (req, res) => {
   let connection;
   try {
     connection = await db.promisePool.getConnection();
-
-    // Get latest evaluation scores for all students across all domains
-    const [results] = await connection.query(`
-      WITH LatestEvaluations AS (
-        SELECT 
-          e.student_id,
-          e.evaluation_period,
-          e.evaluation_date,
-          ROW_NUMBER() OVER (PARTITION BY e.student_id ORDER BY e.evaluation_date DESC) as rn
-        FROM evaluations e
-      )
-      SELECT 
-        d.domain_category,
-        COUNT(CASE WHEN ei.evaluation_value = 'yes' THEN 1 END) as mastered_count,
-        COUNT(ei.evaluation_item_id) as total_items
-      FROM LatestEvaluations le
-      JOIN evaluations e ON le.student_id = e.student_id AND le.evaluation_period = e.evaluation_period
-      JOIN evaluation_items ei ON e.evaluation_id = ei.evaluation_id
-      JOIN domains d ON ei.domain_id = d.domain_id
-      WHERE le.rn = 1
-      GROUP BY d.domain_category
+    
+    const [domainResults] = await connection.query(`
+      WITH LatestEvaluations AS (...)
+      /* Use the SQL query above */
     `);
 
-    // Calculate overall average progress
-    let totalMastered = 0;
-    let totalItems = 0;
-    
-    const domainProgress = results.map(row => {
-      const progress = row.total_items > 0 
-        ? Math.round((row.mastered_count / row.total_items) * 100)
-        : 0;
-      
-      totalMastered += row.mastered_count;
-      totalItems += row.total_items;
-      
-      return {
-        domain: row.domain_category,
-        progress: progress
-      };
-    });
+    // Calculate totals
+    const totals = domainResults.reduce((acc, row) => {
+      acc.totalMastered += row.mastered;
+      acc.totalItems += row.total;
+      return acc;
+    }, { totalMastered: 0, totalItems: 0 });
 
-    const averageProgress = totalItems > 0 
-      ? Math.round((totalMastered / totalItems) * 100)
+    const averageProgress = totals.totalItems > 0 
+      ? Math.round((totals.totalMastered / totals.totalItems) * 100)
       : 0;
+
+    // Group similar domains (e.g., all language domains together)
+    const groupedDomains = domainResults.reduce((acc, row) => {
+      const category = row.domain.includes('Language') ? 'Language' :
+                      row.domain.includes('Motor') ? 'Motor' :
+                      row.domain.includes('Social') ? 'Social' :
+                      row.domain.split(' / ')[0]; // Use the part before " / "
+      
+      if (!acc[category]) {
+        acc[category] = { mastered: 0, total: 0 };
+      }
+      
+      acc[category].mastered += row.mastered;
+      acc[category].total += row.total;
+      
+      return acc;
+    }, {});
+
+    // Format for response
+    const domains = Object.entries(groupedDomains).map(([name, stats]) => ({
+      domain: name,
+      progress: stats.total > 0 ? Math.round((stats.mastered / stats.total) * 100) : 0,
+      mastered: stats.mastered,
+      total: stats.total
+    }));
 
     res.json({
       success: true,
       stats: {
-        averageProgress: averageProgress,
-        totalMastered: totalMastered,
-        totalItems: totalItems,
-        domains: domainProgress
+        averageProgress,
+        totalMastered: totals.totalMastered,
+        totalItems: totals.totalItems,
+        domains
       }
     });
 
@@ -510,7 +507,8 @@ router.get('/evaluations/average-progress', async (req, res) => {
     console.error('Database error:', err);
     res.status(500).json({ 
       success: false, 
-      message: 'Database error' 
+      message: 'Failed to fetch progress data',
+      error: err.message 
     });
   } finally {
     if (connection) connection.release();
