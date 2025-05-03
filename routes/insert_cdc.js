@@ -117,14 +117,43 @@ router.get('/', async (req, res) => {
   
   query += ' ORDER BY cl.province, cl.municipality, cl.barangay';
   
+  let connection;
   try {
-    const [results] = await db.promisePool.query(query, params);
-    res.json({ success: true, data: results });
+    // Get connection from the pool
+    connection = await db.promisePool.getConnection();
+    
+    // Execute query
+    const [results] = await connection.query(query, params);
+    
+    res.json({ 
+      success: true, 
+      data: results 
+    });
+    
   } catch (err) {
-    console.error('Database error:', err);
-    res.status(500).json({ success: false, message: 'Database error' });
+    console.error('Database error:', {
+      message: err.message,
+      stack: err.stack,
+      query: query,
+      params: params,
+      timestamp: new Date().toISOString()
+    });
+    
+    res.status(500).json({ 
+      success: false, 
+      message: 'Database operation failed',
+      error: process.env.NODE_ENV === 'development' ? err.message : undefined
+    });
+    
+  } finally {
+    // Always release the connection back to the pool
+    if (connection) {
+      try {
+        await connection.release();
+      } catch (releaseErr) {
+        console.error('Error releasing connection:', releaseErr);
+      }
+    }
   }
 });
-
-
 module.exports = router;
