@@ -100,96 +100,89 @@ router.post('/', async (req, res) => {
   }
 });
 
-// Get CDCs with robust filtering
 router.get('/', async (req, res) => {
   const { province, municipality, barangay, page = 1, limit = 20 } = req.query;
   
-  // Validate pagination parameters
-  const pageNum = parseInt(page);
-  const limitNum = parseInt(limit);
-  const offset = (pageNum - 1) * limitNum;
-
-  if (isNaN(pageNum)) {
-    return res.status(400).json({
-      success: false,
-      message: 'Invalid page number'
-    });
-  }
-
-  let query = `
-    SELECT 
-      c.id as cdcId,
-      cl.Region as region,
-      cl.province as province,
-      cl.municipality as municipality,
-      cl.barangay as barangay,
-      cl.created_at as createdAt
-    FROM cdc c
-    JOIN cdc_location cl ON c.location_id = cl.id
-  `;
-  
-  const conditions = [];
-  const params = [];
-  
-  // Add filters if provided
-  if (province) {
-    conditions.push('cl.province LIKE ?');
-    params.push(`%${province}%`);
-  }
-  
-  if (municipality) {
-    conditions.push('cl.municipality LIKE ?');
-    params.push(`%${municipality}%`);
-  }
-  
-  if (barangay) {
-    conditions.push('cl.barangay LIKE ?');
-    params.push(`%${barangay}%`);
-  }
-  
-  if (conditions.length > 0) {
-    query += ' WHERE ' + conditions.join(' AND ');
-  }
-  
-  query += ' ORDER BY cl.province, cl.municipality, cl.barangay';
-  
-  // Add pagination
-  const paginatedQuery = query + ` LIMIT ? OFFSET ?`;
-  const paginationParams = [...params, limitNum, offset];
-
-  let connection;
   try {
-    connection = await db.promisePool.getConnection();
-    
-    // Get total count for pagination
-    const countQuery = `SELECT COUNT(*) as total FROM (${query}) as count_query`;
-    const [countResult] = await connection.query(countQuery, params);
-    const total = countResult[0].total;
+    const pageNum = parseInt(page);
+    const limitNum = parseInt(limit);
+    const offset = (pageNum - 1) * limitNum;
 
-    // Get paginated results
-    const [results] = await connection.query(paginatedQuery, paginationParams);
-    
-    res.json({ 
-      success: true,
-      data: results,
-      pagination: {
-        total,
-        page: pageNum,
-        limit: limitNum,
-        totalPages: Math.ceil(total / limitNum)
+    let connection;
+    try {
+      connection = await db.promisePool.getConnection();
+
+      // Updated query with correct column names
+      let query = `
+        SELECT 
+          c.cdc_id as cdcId,
+          cl.Region as region,
+          cl.province as province,
+          cl.municipality as municipality,
+          cl.barangay as barangay
+        FROM cdc c
+        JOIN cdc_location cl ON c.location_id = cl.location_id
+      `;
+      
+      const conditions = [];
+      const params = [];
+      
+      if (province) {
+        conditions.push('cl.province LIKE ?');
+        params.push(`%${province}%`);
       }
-    });
-    
-  } catch (err) {
-    handleDatabaseError(err, res);
-  } finally {
-    if (connection) {
-      try {
-        await connection.release();
-      } catch (releaseErr) {
-        console.error('Connection Release Error:', releaseErr);
+      
+      if (municipality) {
+        conditions.push('cl.municipality LIKE ?');
+        params.push(`%${municipality}%`);
       }
+      
+      if (barangay) {
+        conditions.push('cl.barangay LIKE ?');
+        params.push(`%${barangay}%`);
+      }
+      
+      if (conditions.length > 0) {
+        query += ' WHERE ' + conditions.join(' AND ');
+      }
+      
+      query += ' ORDER BY cl.province, cl.municipality, cl.barangay';
+      
+      // Get total count
+      const countQuery = `SELECT COUNT(*) as total FROM (${query}) as count_query`;
+      const [countResult] = await connection.query(countQuery, params);
+      const total = countResult[0].total;
+
+      // Get paginated results
+      const paginatedQuery = query + ` LIMIT ? OFFSET ?`;
+      const [results] = await connection.query(paginatedQuery, [...params, limitNum, offset]);
+      
+      res.json({ 
+        success: true,
+        data: results,
+        pagination: {
+          total,
+          page: pageNum,
+          limit: limitNum,
+          totalPages: Math.ceil(total / limitNum)
+        }
+      });
+      
+    } catch (err) {
+      console.error('Database error:', err);
+      res.status(500).json({
+        success: false,
+        message: 'Database operation failed',
+        error: err.message
+      });
+    } finally {
+      if (connection) await connection.release();
     }
+  } catch (err) {
+    res.status(500).json({
+      success: false,
+      message: 'Internal server error'
+    });
   }
 });
 
