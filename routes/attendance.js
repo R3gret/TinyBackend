@@ -231,53 +231,53 @@ router.get('/weekly', async (req, res) => {
     const endDate = new Date(today);
     endDate.setDate(today.getDate() + 3);
 
-    // Format dates for SQL query (YYYY-MM-DD)
-    const startDateStr = startDate.toISOString().split('T')[0];
-    const endDateStr = endDate.toISOString().split('T')[0];
+    // Query to get distinct student count first
+    const [studentCount] = await connection.query(
+      'SELECT COUNT(DISTINCT student_id) as total FROM students'
+    );
+    const totalStudents = studentCount[0].total || 0;
 
     // Query attendance data for this date range
     const [results] = await connection.query(`
       SELECT 
-        DATE(attendance_date) AS date,
-        COUNT(*) AS total_attendance,
-        SUM(CASE WHEN status = 'Present' THEN 1 ELSE 0 END) AS present_count,
-        SUM(CASE WHEN status = 'Late' THEN 1 ELSE 0 END) AS late_count,
-        SUM(CASE WHEN status = 'Absent' THEN 1 ELSE 0 END) AS absent_count,
-        SUM(CASE WHEN status = 'Excused' THEN 1 ELSE 0 END) AS excused_count
-      FROM attendance
-      WHERE DATE(attendance_date) BETWEEN ? AND ?
-      GROUP BY DATE(attendance_date)
+        DATE(a.attendance_date) AS date,
+        COUNT(DISTINCT a.student_id) AS total_attendance,
+        SUM(CASE WHEN a.status = 'Present' THEN 1 ELSE 0 END) AS present_count,
+        SUM(CASE WHEN a.status = 'Late' THEN 1 ELSE 0 END) AS late_count,
+        SUM(CASE WHEN a.status = 'Absent' THEN 1 ELSE 0 END) AS absent_count,
+        SUM(CASE WHEN a.status = 'Excused' THEN 1 ELSE 0 END) AS excused_count
+      FROM attendance a
+      WHERE DATE(a.attendance_date) BETWEEN ? AND ?
+      GROUP BY DATE(a.attendance_date)
       ORDER BY date ASC
-    `, [startDateStr, endDateStr]);
+    `, [startDate, endDate]);
 
-    // Generate all 7 days with proper data (including missing days)
+    // Generate all 7 days with proper data
     const finalResults = [];
     for (let i = -3; i <= 3; i++) {
       const currentDate = new Date(today);
       currentDate.setDate(today.getDate() + i);
       const dateString = currentDate.toISOString().split('T')[0];
       
-      // Find matching data (use find on string dates to avoid timezone issues)
       const existingData = results.find(row => 
         new Date(row.date).toISOString().split('T')[0] === dateString
       );
       
-      // Check if it's a weekend
       const isWeekend = currentDate.getDay() === 0 || currentDate.getDay() === 6;
       
       // Combine present and late counts
       const presentCount = (existingData?.present_count || 0) + (existingData?.late_count || 0);
       const totalCount = existingData?.total_attendance || 0;
-      
+
       finalResults.push({
         date: dateString,
         present: presentCount,
         absent: existingData?.absent_count || 0,
         excused: existingData?.excused_count || 0,
-        total: totalCount,
+        total: totalCount > 0 ? totalCount : totalStudents, // Use totalStudents if no attendance taken
         percentage: totalCount > 0 
           ? Math.round((presentCount / totalCount) * 100)
-          : isWeekend ? null : 0, // Null for weekends, 0 for weekdays with no data
+          : isWeekend ? null : 0,
         isWeekend: isWeekend
       });
     }
