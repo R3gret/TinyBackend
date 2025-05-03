@@ -221,32 +221,26 @@ router.get('/weekly', async (req, res) => {
   try {
     connection = await db.promisePool.getConnection();
 
-    // Get weekly attendance data
+    // Get weekly attendance data for the last 4 weeks and next 4 weeks
     const [results] = await connection.query(`
       SELECT 
-        YEARWEEK(attendance_date) AS week_id,
+        YEARWEEK(attendance_date, 1) AS week_id,  -- Mode 1 for Monday as first day of week
         MIN(DATE(attendance_date)) AS week_start_date,
+        MAX(DATE(attendance_date)) AS week_end_date,
         COUNT(*) AS total_attendance,
         SUM(CASE WHEN status IN ('Present', 'Late') THEN 1 ELSE 0 END) AS present_count
       FROM attendance
-      WHERE attendance_date >= DATE_SUB(CURDATE(), INTERVAL 8 WEEK)
-      GROUP BY YEARWEEK(attendance_date)
+      WHERE attendance_date BETWEEN DATE_SUB(CURDATE(), INTERVAL 4 WEEK) 
+                            AND DATE_ADD(CURDATE(), INTERVAL 4 WEEK)
+      GROUP BY YEARWEEK(attendance_date, 1)
       ORDER BY week_start_date ASC
     `);
-
-    // Get total unique students who have attendance records
-    const [uniqueStudents] = await connection.query(`
-      SELECT COUNT(DISTINCT student_id) as total 
-      FROM attendance
-      WHERE attendance_date >= DATE_SUB(CURDATE(), INTERVAL 8 WEEK)
-    `);
-
-    const total = uniqueStudents[0].total || 1; // Avoid division by zero
 
     res.json({
       success: true,
       data: results.map(row => ({
         date: row.week_start_date,
+        end_date: row.week_end_date,
         present: row.present_count,
         total: row.total_attendance,
         percentage: Math.round((row.present_count / row.total_attendance) * 100)
