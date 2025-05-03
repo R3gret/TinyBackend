@@ -215,16 +215,17 @@ router.get('/stats', async (req, res) => {
   }
 });
 
-// Get weekly attendance data
+// Updated weekly attendance endpoint
 router.get('/weekly', async (req, res) => {
   let connection;
   try {
     connection = await db.promisePool.getConnection();
 
-    // Get attendance by week (last 8 weeks)
+    // Get weekly attendance data that complies with only_full_group_by
     const [results] = await connection.query(`
       SELECT 
-        DATE(DATE_SUB(attendance_date, INTERVAL WEEKDAY(attendance_date) DAY)) AS week_start_date,
+        YEARWEEK(attendance_date) AS week_id,
+        MIN(DATE(attendance_date)) AS week_start_date,
         COUNT(*) AS total_attendance,
         SUM(CASE WHEN status IN ('Present', 'Late') THEN 1 ELSE 0 END) AS present_count
       FROM attendance
@@ -233,7 +234,7 @@ router.get('/weekly', async (req, res) => {
       ORDER BY week_start_date ASC
     `);
 
-    // Calculate total students for percentage calculation
+    // Get total active students for percentage calculation
     const [totalStudents] = await connection.query(
       'SELECT COUNT(*) as total FROM students WHERE active = 1'
     );
@@ -246,7 +247,7 @@ router.get('/weekly', async (req, res) => {
         date: row.week_start_date,
         present: row.present_count,
         total: row.total_attendance,
-        percentage: Math.round((row.present_count / (row.total_attendance || 1)) * 100)
+        percentage: Math.round((row.present_count / row.total_attendance) * 100)
       }))
     });
 
