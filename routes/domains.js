@@ -32,6 +32,39 @@ function groupDomains(domains, evaluations) {
   }, {});
 }
 
+// New endpoint to get domain categories for dashboard
+router.get('/categories', async (req, res) => {
+  let connection;
+  try {
+    connection = await db.promisePool.getConnection();
+    const [results] = await connection.query(`
+      SELECT DISTINCT 
+        CASE 
+          WHEN domain_category LIKE '%self-help%' THEN 'Self-Help'
+          ELSE domain_category
+        END as category
+      FROM domains
+      ORDER BY category
+    `);
+
+    const categories = results.map(row => row.category);
+    
+    res.json({ 
+      success: true, 
+      categories 
+    });
+  } catch (err) {
+    console.error('Error fetching domain categories:', err);
+    res.status(500).json({ 
+      success: false, 
+      message: 'Failed to fetch domain categories', 
+      error: err.message 
+    });
+  } finally {
+    if (connection) connection.release();
+  }
+});
+
 // Get domain structure
 router.get('/structure', async (req, res) => {
   let connection;
@@ -59,6 +92,7 @@ router.get('/structure', async (req, res) => {
   }
 });
 
+// [Rest of your existing endpoints remain unchanged...]
 // Check if evaluation exists
 router.get('/evaluations/check', async (req, res) => {
   const { student_id, period } = req.query;
