@@ -220,60 +220,56 @@ router.get('/weekly', async (req, res) => {
   try {
     connection = await db.promisePool.getConnection();
 
-    // Get daily attendance data with wide date range
-    const [allResults] = await connection.query(`
+    // Get the current date at midnight to ensure proper date comparison
+    const today = new Date();
+    today.setHours(0, 0, 0, 0);
+    
+    // Calculate date range (3 days before and after today)
+    const startDate = new Date(today);
+    startDate.setDate(today.getDate() - 3);
+    
+    const endDate = new Date(today);
+    endDate.setDate(today.getDate() + 3);
+
+    // Query only the 7 days we need (more efficient than querying entire table)
+    const [results] = await connection.query(`
       SELECT 
         DATE(attendance_date) AS date,
         COUNT(*) AS total_attendance,
         SUM(CASE WHEN status IN ('Present', 'Late') THEN 1 ELSE 0 END) AS present_count,
-        SUM(CASE WHEN status = 'Absent' THEN 1 ELSE 0 END) AS absent_count
+        SUM(CASE WHEN status = 'Absent' THEN 1 ELSE 0 END) AS absent_count,
+        SUM(CASE WHEN status = 'Excused' THEN 1 ELSE 0 END) AS excused_count
       FROM attendance
-      WHERE attendance_date BETWEEN '2024-01-01' AND '2025-12-31'
+      WHERE attendance_date BETWEEN ? AND ?
       GROUP BY DATE(attendance_date)
       ORDER BY date ASC
-    `);
+    `, [startDate, endDate]);
 
-    // Then filter to get just the 7 days we want (3 before today, today, 3 after)
-    const today = new Date();
-    const startDate = new Date(today);
-    startDate.setDate(today.getDate() - 3);
-    const endDate = new Date(today);
-    endDate.setDate(today.getDate() + 3);
-    
-    const filteredResults = allResults.filter(row => {
-      const rowDate = new Date(row.date);
-      return rowDate >= startDate && rowDate <= endDate;
-    });
-
-    // Fill in any missing days with zero values
+    // Generate all 7 days with proper data (including missing days)
     const finalResults = [];
     for (let i = -3; i <= 3; i++) {
       const currentDate = new Date(today);
       currentDate.setDate(today.getDate() + i);
       const dateString = currentDate.toISOString().split('T')[0];
       
-      const existingData = filteredResults.find(row => row.date === dateString);
+      const existingData = results.find(row => row.date === dateString);
       
-      finalResults.push(existingData || {
+      finalResults.push({
         date: dateString,
-        present_count: 0,
-        absent_count: 0,
-        total_attendance: 0,
-        percentage: 0
+        present: existingData?.present_count || 0,
+        absent: existingData?.absent_count || 0,
+        excused: existingData?.excused_count || 0,
+        total: existingData?.total_attendance || 0,
+        percentage: existingData?.total_attendance > 0 
+          ? Math.round((existingData.present_count / existingData.total_attendance) * 100)
+          : 0
       });
     }
 
+    console.log('Processed attendance data:', finalResults);
     res.json({
       success: true,
-      data: finalResults.map(row => ({
-        date: row.date,
-        present: row.present_count,
-        absent: row.absent_count,
-        total: row.total_attendance,
-        percentage: row.total_attendance > 0 
-          ? Math.round((row.present_count / row.total_attendance) * 100)
-          : 0
-      }))
+      data: finalResults
     });
 
   } catch (err) {
