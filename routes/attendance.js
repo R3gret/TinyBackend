@@ -223,15 +223,14 @@ router.get('/weekly', async (req, res) => {
     // Get daily attendance data for the last 3 days and next 3 days (7 days total)
     const [results] = await connection.query(`
       SELECT 
-        DATE(attendance_date) AS date,
-        COUNT(*) AS total_attendance,
-        SUM(CASE WHEN status IN ('Present', 'Late') THEN 1 ELSE 0 END) AS present_count,
-        SUM(CASE WHEN status = 'Absent' THEN 1 ELSE 0 END) AS absent_count
-      FROM attendance
-      WHERE attendance_date BETWEEN DATE_SUB(CURDATE(), INTERVAL 3 DAY) 
-                            AND DATE_ADD(CURDATE(), INTERVAL 3 DAY)
-      GROUP BY DATE(attendance_date)
-      ORDER BY date ASC
+  DATE(attendance_date) AS date,
+  COUNT(*) AS total_attendance,
+  SUM(CASE WHEN status IN ('Present', 'Late') THEN 1 ELSE 0 END) AS present_count,
+  SUM(CASE WHEN status = 'Absent' THEN 1 ELSE 0 END) AS absent_count
+FROM attendance
+WHERE attendance_date BETWEEN '2024-01-01' AND '2025-12-31'
+GROUP BY DATE(attendance_date)
+ORDER BY date ASC;
     `);
 
     res.json({
