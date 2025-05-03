@@ -220,27 +220,59 @@ router.get('/weekly', async (req, res) => {
   try {
     connection = await db.promisePool.getConnection();
 
-    // Get daily attendance data for the last 3 days and next 3 days (7 days total)
-    const [results] = await connection.query(`
+    // Get daily attendance data with wide date range
+    const [allResults] = await connection.query(`
       SELECT 
-  DATE(attendance_date) AS date,
-  COUNT(*) AS total_attendance,
-  SUM(CASE WHEN status IN ('Present', 'Late') THEN 1 ELSE 0 END) AS present_count,
-  SUM(CASE WHEN status = 'Absent' THEN 1 ELSE 0 END) AS absent_count
-FROM attendance
-WHERE attendance_date BETWEEN '2024-01-01' AND '2025-12-31'
-GROUP BY DATE(attendance_date)
-ORDER BY date ASC;
+        DATE(attendance_date) AS date,
+        COUNT(*) AS total_attendance,
+        SUM(CASE WHEN status IN ('Present', 'Late') THEN 1 ELSE 0 END) AS present_count,
+        SUM(CASE WHEN status = 'Absent' THEN 1 ELSE 0 END) AS absent_count
+      FROM attendance
+      WHERE attendance_date BETWEEN '2024-01-01' AND '2025-12-31'
+      GROUP BY DATE(attendance_date)
+      ORDER BY date ASC
     `);
+
+    // Then filter to get just the 7 days we want (3 before today, today, 3 after)
+    const today = new Date();
+    const startDate = new Date(today);
+    startDate.setDate(today.getDate() - 3);
+    const endDate = new Date(today);
+    endDate.setDate(today.getDate() + 3);
+    
+    const filteredResults = allResults.filter(row => {
+      const rowDate = new Date(row.date);
+      return rowDate >= startDate && rowDate <= endDate;
+    });
+
+    // Fill in any missing days with zero values
+    const finalResults = [];
+    for (let i = -3; i <= 3; i++) {
+      const currentDate = new Date(today);
+      currentDate.setDate(today.getDate() + i);
+      const dateString = currentDate.toISOString().split('T')[0];
+      
+      const existingData = filteredResults.find(row => row.date === dateString);
+      
+      finalResults.push(existingData || {
+        date: dateString,
+        present_count: 0,
+        absent_count: 0,
+        total_attendance: 0,
+        percentage: 0
+      });
+    }
 
     res.json({
       success: true,
-      data: results.map(row => ({
+      data: finalResults.map(row => ({
         date: row.date,
         present: row.present_count,
         absent: row.absent_count,
         total: row.total_attendance,
-        percentage: Math.round((row.present_count / row.total_attendance) * 100)
+        percentage: row.total_attendance > 0 
+          ? Math.round((row.present_count / row.total_attendance) * 100)
+          : 0
       }))
     });
 
