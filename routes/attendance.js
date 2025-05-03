@@ -224,19 +224,19 @@ router.get('/weekly', async (req, res) => {
     // Get attendance by week (last 8 weeks)
     const [results] = await connection.query(`
       SELECT 
-        YEARWEEK(attendance_date) AS week,
+        DATE(DATE_SUB(attendance_date, INTERVAL WEEKDAY(attendance_date) DAY)) AS week_start_date,
         COUNT(*) AS total_attendance,
         SUM(CASE WHEN status IN ('Present', 'Late') THEN 1 ELSE 0 END) AS present_count
       FROM attendance
       WHERE attendance_date >= DATE_SUB(CURDATE(), INTERVAL 8 WEEK)
       GROUP BY YEARWEEK(attendance_date)
-      ORDER BY week ASC
+      ORDER BY week_start_date ASC
     `);
 
     res.json({
       success: true,
       data: results.map(row => ({
-        week: row.week,
+        date: row.week_start_date,
         present: row.present_count,
         total: row.total_attendance,
         percentage: Math.round((row.present_count / row.total_attendance) * 100)
