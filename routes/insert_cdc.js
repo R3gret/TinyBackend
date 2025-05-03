@@ -75,4 +75,56 @@ router.post('/', async (req, res) => {
   }
 });
 
+// Add these endpoints to your existing cdcRoutes.js
+
+// Get all CDCs with filtering
+router.get('/', async (req, res) => {
+  const { province, municipality, barangay } = req.query;
+  
+  let query = `
+    SELECT 
+      c.id as cdcId,
+      cl.Region as region,
+      cl.province as province,
+      cl.municipality as municipality,
+      cl.barangay as barangay,
+      cl.created_at as createdAt
+    FROM cdc c
+    JOIN cdc_location cl ON c.location_id = cl.id
+  `;
+  
+  const conditions = [];
+  const params = [];
+  
+  if (province) {
+    conditions.push('cl.province LIKE ?');
+    params.push(`%${province}%`);
+  }
+  
+  if (municipality) {
+    conditions.push('cl.municipality LIKE ?');
+    params.push(`%${municipality}%`);
+  }
+  
+  if (barangay) {
+    conditions.push('cl.barangay LIKE ?');
+    params.push(`%${barangay}%`);
+  }
+  
+  if (conditions.length > 0) {
+    query += ' WHERE ' + conditions.join(' AND ');
+  }
+  
+  query += ' ORDER BY cl.province, cl.municipality, cl.barangay';
+  
+  try {
+    const [results] = await db.promisePool.query(query, params);
+    res.json({ success: true, data: results });
+  } catch (err) {
+    console.error('Database error:', err);
+    res.status(500).json({ success: false, message: 'Database error' });
+  }
+});
+
+
 module.exports = router;
