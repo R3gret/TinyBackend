@@ -214,4 +214,63 @@ router.get('/enrollment-stats', async (req, res) => {
     if (connection) connection.release();
   }
 });
+
+// New route to get age group distribution
+router.get('/age-distribution', async (req, res) => {
+  let connection;
+  try {
+    connection = await db.promisePool.getConnection();
+    
+    // Get current date for age calculations
+    const today = new Date();
+    const currentYear = today.getFullYear();
+    const currentMonth = today.getMonth();
+    const currentDay = today.getDate();
+    
+    // Calculate date ranges for each age group
+    const ageGroups = {
+      '3-4': {
+        minDate: new Date(currentYear - 4, currentMonth, currentDay),
+        maxDate: new Date(currentYear - 3, currentMonth, currentDay)
+      },
+      '4-5': {
+        minDate: new Date(currentYear - 5, currentMonth, currentDay),
+        maxDate: new Date(currentYear - 4, currentMonth, currentDay)
+      },
+      '5-6': {
+        minDate: new Date(currentYear - 6, currentMonth, currentDay),
+        maxDate: new Date(currentYear - 5, currentMonth, currentDay)
+      }
+    };
+    
+    // Query to count students in each age group
+    const distribution = {};
+    
+    for (const [group, dates] of Object.entries(ageGroups)) {
+      const [results] = await connection.query(
+        `SELECT COUNT(*) as count 
+         FROM students 
+         WHERE birthdate BETWEEN ? AND ?`,
+        [dates.minDate.toISOString().split('T')[0], dates.maxDate.toISOString().split('T')[0]]
+      );
+      
+      distribution[group] = results[0].count;
+    }
+    
+    return res.json({
+      success: true,
+      distribution
+    });
+    
+  } catch (err) {
+    console.error('Database query error:', err);
+    return res.status(500).json({ 
+      success: false, 
+      message: 'Database error' 
+    });
+  } finally {
+    if (connection) connection.release();
+  }
+});
+
 module.exports = router;
