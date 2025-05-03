@@ -2,22 +2,46 @@ const express = require('express');
 const router = express.Router();
 const db = require('../db');
 
+// Enhanced database error handler
+const handleDatabaseError = (err, res) => {
+  console.error('Database Error:', {
+    message: err.message,
+    code: err.code,
+    sqlMessage: err.sqlMessage,
+    sql: err.sql,
+    stack: process.env.NODE_ENV === 'development' ? err.stack : undefined,
+    timestamp: new Date().toISOString()
+  });
+
+  res.status(500).json({
+    success: false,
+    message: 'Database operation failed',
+    ...(process.env.NODE_ENV === 'development' && {
+      debug: {
+        error: err.message,
+        code: err.code
+      }
+    })
+  });
+};
+
+// Create CDC endpoint with improved validation
 router.post('/', async (req, res) => {
-  const {
-    name,
-    region,
-    province,
-    municipality,
-    barangay,
-    location_details
-  } = req.body;
+  const { name, region, province, municipality, barangay } = req.body;
 
-  console.log("Received CDC data:", req.body);
+  // Enhanced validation
+  const missingFields = [];
+  if (!name) missingFields.push('name');
+  if (!region) missingFields.push('region');
+  if (!province) missingFields.push('province');
+  if (!municipality) missingFields.push('municipality');
+  if (!barangay) missingFields.push('barangay');
 
-  if (!name || !region || !province || !municipality || !barangay) {
-    return res.status(400).json({ 
-      success: false, 
-      message: 'Required fields are missing. Please provide name and complete address.' 
+  if (missingFields.length > 0) {
+    return res.status(400).json({
+      success: false,
+      message: 'Missing required fields',
+      missingFields
     });
   }
 
@@ -26,61 +50,72 @@ router.post('/', async (req, res) => {
     connection = await db.promisePool.getConnection();
     await connection.beginTransaction();
 
-    // Step 1: Insert into cdc_location first
-    const locationQuery = `INSERT INTO cdc_location 
+    // Insert location with error handling
+    const locationQuery = `
+      INSERT INTO cdc_location 
       (Region, province, municipality, barangay) 
-      VALUES (?, ?, ?, ?)`;
+      VALUES (?, ?, ?, ?)
+    `;
     
     const [locationResults] = await connection.query(locationQuery, [
-      region,
-      province,
-      municipality,
-      barangay
+      region, province, municipality, barangay
     ]);
 
     const locationId = locationResults.insertId;
-    console.log(`Inserted location ID: ${locationId}`);
 
-    // Step 2: Insert into cdc table with reference to location
-    const cdcQuery = `INSERT INTO cdc 
-      (location_id) 
-      VALUES (?)`;
-    
-    const [cdcResults] = await connection.query(cdcQuery, [
-      locationId
-    ]);
-
-    const cdcId = cdcResults.insertId;
-    console.log(`Inserted CDC ID: ${cdcId}`);
+    // Insert CDC reference
+    const [cdcResults] = await connection.query(
+      `INSERT INTO cdc (location_id) VALUES (?)`,
+      [locationId]
+    );
 
     await connection.commit();
-    console.log('CDC created successfully with ID:', cdcId);
-    return res.json({ 
-      success: true, 
+    
+    return res.json({
+      success: true,
       message: 'CDC created successfully',
-      cdcId,
-      locationId
+      data: {
+        cdcId: cdcResults.insertId,
+        locationId
+      }
     });
 
   } catch (err) {
-    if (connection) await connection.rollback();
-    console.error('Database error:', err);
-    return res.status(500).json({ 
-      success: false, 
-      message: 'Database error during CDC creation',
-      error: err.message 
-    });
+    if (connection) {
+      try {
+        await connection.rollback();
+      } catch (rollbackErr) {
+        console.error('Rollback Error:', rollbackErr);
+      }
+    }
+    handleDatabaseError(err, res);
   } finally {
-    if (connection) connection.release();
+    if (connection) {
+      try {
+        await connection.release();
+      } catch (releaseErr) {
+        console.error('Connection Release Error:', releaseErr);
+      }
+    }
   }
 });
 
-// Add these endpoints to your existing cdcRoutes.js
-
-// Get all CDCs with filtering
+// Get CDCs with robust filtering
 router.get('/', async (req, res) => {
-  const { province, municipality, barangay } = req.query;
+  const { province, municipality, barangay, page = 1, limit = 20 } = req.query;
   
+  // Validate pagination parameters
+  const pageNum = parseInt(page);
+  const limitNum = parseInt(limit);
+  const offset = (pageNum - 1) * limitNum;
+
+  if (isNaN(pageNum)) {
+    return res.status(400).json({
+      success: false,
+      message: 'Invalid page number'
+    });
+  }
+
   let query = `
     SELECT 
       c.id as cdcId,
@@ -96,6 +131,7 @@ router.get('/', async (req, res) => {
   const conditions = [];
   const params = [];
   
+  // Add filters if provided
   if (province) {
     conditions.push('cl.province LIKE ?');
     params.push(`%${province}%`);
@@ -117,43 +153,44 @@ router.get('/', async (req, res) => {
   
   query += ' ORDER BY cl.province, cl.municipality, cl.barangay';
   
+  // Add pagination
+  const paginatedQuery = query + ` LIMIT ? OFFSET ?`;
+  const paginationParams = [...params, limitNum, offset];
+
   let connection;
   try {
-    // Get connection from the pool
     connection = await db.promisePool.getConnection();
     
-    // Execute query
-    const [results] = await connection.query(query, params);
+    // Get total count for pagination
+    const countQuery = `SELECT COUNT(*) as total FROM (${query}) as count_query`;
+    const [countResult] = await connection.query(countQuery, params);
+    const total = countResult[0].total;
+
+    // Get paginated results
+    const [results] = await connection.query(paginatedQuery, paginationParams);
     
     res.json({ 
-      success: true, 
-      data: results 
+      success: true,
+      data: results,
+      pagination: {
+        total,
+        page: pageNum,
+        limit: limitNum,
+        totalPages: Math.ceil(total / limitNum)
+      }
     });
     
   } catch (err) {
-    console.error('Database error:', {
-      message: err.message,
-      stack: err.stack,
-      query: query,
-      params: params,
-      timestamp: new Date().toISOString()
-    });
-    
-    res.status(500).json({ 
-      success: false, 
-      message: 'Database operation failed',
-      error: process.env.NODE_ENV === 'development' ? err.message : undefined
-    });
-    
+    handleDatabaseError(err, res);
   } finally {
-    // Always release the connection back to the pool
     if (connection) {
       try {
         await connection.release();
       } catch (releaseErr) {
-        console.error('Error releasing connection:', releaseErr);
+        console.error('Connection Release Error:', releaseErr);
       }
     }
   }
 });
+
 module.exports = router;
