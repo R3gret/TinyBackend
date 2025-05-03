@@ -49,6 +49,7 @@ app.use('/api/user_session', require('./routes/user_session'));
 app.use('/api/domains', require('./routes/domains'));
 app.use('/api/files', require('./routes/fileRoutes'));
 app.use('/api/announcements', require('./routes/announcement'));
+app.use('/api/insert_cdc', require('./routes/insert_cdc'));
 
 // Static files
 app.use('/uploads/announcements', express.static(path.join(__dirname, 'uploads/announcements')));
