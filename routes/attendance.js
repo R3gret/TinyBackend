@@ -221,7 +221,7 @@ router.get('/weekly', async (req, res) => {
   try {
     connection = await db.promisePool.getConnection();
 
-    // Get weekly attendance data that complies with only_full_group_by
+    // Get weekly attendance data
     const [results] = await connection.query(`
       SELECT 
         YEARWEEK(attendance_date) AS week_id,
@@ -234,12 +234,14 @@ router.get('/weekly', async (req, res) => {
       ORDER BY week_start_date ASC
     `);
 
-    // Get total active students for percentage calculation
-    const [totalStudents] = await connection.query(
-      'SELECT COUNT(*) as total FROM students WHERE active = 1'
-    );
+    // Get total unique students who have attendance records
+    const [uniqueStudents] = await connection.query(`
+      SELECT COUNT(DISTINCT student_id) as total 
+      FROM attendance
+      WHERE attendance_date >= DATE_SUB(CURDATE(), INTERVAL 8 WEEK)
+    `);
 
-    const total = totalStudents[0].total || 1; // Avoid division by zero
+    const total = uniqueStudents[0].total || 1; // Avoid division by zero
 
     res.json({
       success: true,
