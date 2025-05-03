@@ -480,4 +480,81 @@ router.get('/evaluations/single/:evaluation_id', async (req, res) => {
   }
 });
 
+
+// Add this new endpoint to domain.js
+router.get('/progress-summary', async (req, res) => {
+  let connection;
+  try {
+    connection = await db.promisePool.getConnection();
+    
+    // Query to get evaluation counts per domain category
+    const [results] = await connection.query(`
+      SELECT 
+        d.domain_category,
+        COUNT(CASE WHEN ei.evaluation_value = 'yes' THEN 1 END) as yes_count,
+        COUNT(ei.evaluation_item_id) as total_items
+      FROM evaluation_items ei
+      JOIN domains d ON ei.domain_id = d.domain_id
+      JOIN evaluations e ON ei.evaluation_id = e.evaluation_id
+      GROUP BY d.domain_category
+    `);
+
+    // Process results to calculate percentages
+    const progressSummary = results.map(row => {
+      const category = row.domain_category.toLowerCase().includes('self-help') 
+        ? 'Self-Help' 
+        : row.domain_category.split('/')[0].trim();
+      
+      const progress = row.total_items > 0 
+        ? Math.round((row.yes_count / row.total_items) * 100)
+        : 0;
+
+      return {
+        category,
+        progress,
+        completed: row.yes_count,
+        total: row.total_items
+      };
+    });
+
+    // Group by category in case of duplicates
+    const groupedSummary = progressSummary.reduce((acc, item) => {
+      if (!acc[item.category]) {
+        acc[item.category] = {
+          progress: 0,
+          completed: 0,
+          total: 0
+        };
+      }
+      acc[item.category].progress += item.progress;
+      acc[item.category].completed += item.completed;
+      acc[item.category].total += item.total;
+      return acc;
+    }, {});
+
+    // Calculate average progress for each category
+    const finalSummary = Object.entries(groupedSummary).map(([category, data]) => ({
+      category,
+      progress: Math.round(data.progress / (data.total > 0 ? data.total : 1)),
+      completed: data.completed,
+      total: data.total
+    }));
+
+    res.json({ 
+      success: true,
+      data: finalSummary
+    });
+
+  } catch (err) {
+    console.error('Error fetching progress summary:', err);
+    res.status(500).json({ 
+      success: false, 
+      message: 'Failed to fetch progress summary',
+      error: err.message 
+    });
+  } finally {
+    if (connection) connection.release();
+  }
+});
+
 module.exports = router;
