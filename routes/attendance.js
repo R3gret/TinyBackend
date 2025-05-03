@@ -220,7 +220,7 @@ router.get('/weekly', async (req, res) => {
   try {
     connection = await db.promisePool.getConnection();
 
-    // Get the current date at midnight to ensure proper date comparison
+    // Get the current date at midnight for accurate comparison
     const today = new Date();
     today.setHours(0, 0, 0, 0);
     
@@ -231,7 +231,7 @@ router.get('/weekly', async (req, res) => {
     const endDate = new Date(today);
     endDate.setDate(today.getDate() + 3);
 
-    // Query only the 7 days we need (more efficient than querying entire table)
+    // Query attendance data for this date range
     const [results] = await connection.query(`
       SELECT 
         DATE(attendance_date) AS date,
@@ -254,6 +254,9 @@ router.get('/weekly', async (req, res) => {
       
       const existingData = results.find(row => row.date === dateString);
       
+      // If no data exists for this date, check if it's a weekend
+      const isWeekend = currentDate.getDay() === 0 || currentDate.getDay() === 6;
+      
       finalResults.push({
         date: dateString,
         present: existingData?.present_count || 0,
@@ -262,11 +265,11 @@ router.get('/weekly', async (req, res) => {
         total: existingData?.total_attendance || 0,
         percentage: existingData?.total_attendance > 0 
           ? Math.round((existingData.present_count / existingData.total_attendance) * 100)
-          : 0
+          : isWeekend ? null : 0, // Null for weekends, 0 for weekdays with no data
+        isWeekend: isWeekend
       });
     }
 
-    console.log('Processed attendance data:', finalResults);
     res.json({
       success: true,
       data: finalResults
