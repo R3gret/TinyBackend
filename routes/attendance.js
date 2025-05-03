@@ -233,13 +233,20 @@ router.get('/weekly', async (req, res) => {
       ORDER BY week_start_date ASC
     `);
 
+    // Calculate total students for percentage calculation
+    const [totalStudents] = await connection.query(
+      'SELECT COUNT(*) as total FROM students WHERE active = 1'
+    );
+
+    const total = totalStudents[0].total || 1; // Avoid division by zero
+
     res.json({
       success: true,
       data: results.map(row => ({
         date: row.week_start_date,
         present: row.present_count,
         total: row.total_attendance,
-        percentage: Math.round((row.present_count / row.total_attendance) * 100)
+        percentage: Math.round((row.present_count / (row.total_attendance || 1)) * 100)
       }))
     });
 
@@ -247,11 +254,10 @@ router.get('/weekly', async (req, res) => {
     console.error('Database error:', err);
     res.status(500).json({ 
       success: false, 
-      message: 'Database error' 
+      message: err.message || 'Database error' 
     });
   } finally {
     if (connection) connection.release();
   }
 });
-
 module.exports = router;
