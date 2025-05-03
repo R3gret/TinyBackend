@@ -482,6 +482,7 @@ router.get('/evaluations/single/:evaluation_id', async (req, res) => {
 
 
 // Add this new endpoint to domain.js
+// Add this new endpoint to your domain.js router
 router.get('/progress-summary', async (req, res) => {
   let connection;
   try {
@@ -499,7 +500,7 @@ router.get('/progress-summary', async (req, res) => {
       GROUP BY d.domain_category
     `);
 
-    // Process results to calculate percentages
+    // Process results to calculate percentages and normalize category names
     const progressSummary = results.map(row => {
       const category = row.domain_category.toLowerCase().includes('self-help') 
         ? 'Self-Help' 
@@ -517,7 +518,7 @@ router.get('/progress-summary', async (req, res) => {
       };
     });
 
-    // Group by category in case of duplicates
+    // Group by category in case of duplicates from the split
     const groupedSummary = progressSummary.reduce((acc, item) => {
       if (!acc[item.category]) {
         acc[item.category] = {
