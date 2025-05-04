@@ -4,6 +4,7 @@ const db = require('../db');
 const multer = require('multer');
 const path = require('path');
 const fs = require('fs');
+const jwt = require('jsonwebtoken');
 
 // Configure multer for announcement attachments
 const storage = multer.diskStorage({
@@ -21,13 +22,45 @@ const storage = multer.diskStorage({
 
 const upload = multer({ storage });
 
-// GET /api/announcements - Get all announcements (public)
-router.get('/', async (req, res) => {
+// JWT verification helper
+const verifyToken = (req, res, next) => {
+  const token = req.headers.authorization?.split(' ')[1];
+  if (!token) {
+    return res.status(401).json({ success: false, message: 'Authorization token required' });
+  }
+
+  try {
+    const decoded = jwt.verify(token, process.env.JWT_SECRET);
+    req.user = decoded;
+    next();
+  } catch (err) {
+    console.error('JWT verification error:', err);
+    return res.status(403).json({ success: false, message: 'Invalid token' });
+  }
+};
+
+// GET /api/announcements - Get announcements filtered by CDC
+router.get('/', verifyToken, async (req, res) => {
   const { ageFilter } = req.query;
   let connection;
 
   try {
     connection = await db.promisePool.getConnection();
+    
+    // Get the user's CDC ID from the authenticated user
+    const [user] = await connection.query(
+      'SELECT cdc_id FROM users WHERE id = ?',
+      [req.user.id]
+    );
+    
+    if (!user.length || !user[0].cdc_id) {
+      return res.status(403).json({
+        success: false,
+        message: 'User CDC information not found'
+      });
+    }
+
+    const userCdcId = user[0].cdc_id;
     
     let query = `
       SELECT 
@@ -40,12 +73,14 @@ router.get('/', async (req, res) => {
         a.attachment_path as attachmentUrl,
         a.attachment_name as attachmentName
       FROM announcements a
+      JOIN users u ON a.author_id = u.id
+      WHERE u.cdc_id = ?
     `;
     
-    const params = [];
+    const params = [userCdcId];
     
     if (ageFilter && ageFilter !== 'all') {
-      query += ` WHERE a.age_filter = ? OR a.age_filter = 'all'`;
+      query += ` AND (a.age_filter = ? OR a.age_filter = 'all')`;
       params.push(ageFilter);
     }
     
@@ -77,13 +112,11 @@ router.get('/', async (req, res) => {
   }
 });
 
-const authenticate = require('./authMiddleware');
-
 // POST /api/announcements - Create new announcement (protected)
-router.post('/', authenticate, upload.single('attachment'), async (req, res) => {
+router.post('/', verifyToken, upload.single('attachment'), async (req, res) => {
   const { title, message, ageFilter } = req.body;
   const file = req.file;
-  const user = req.user; // User data from authentication middleware
+  const user = req.user; // User data from JWT verification
   let connection;
 
   if (!title || !message || !ageFilter) {
@@ -98,6 +131,16 @@ router.post('/', authenticate, upload.single('attachment'), async (req, res) => 
   try {
     connection = await db.promisePool.getConnection();
 
+    // Get user's CDC ID to store with announcement
+    const [userData] = await connection.query(
+      'SELECT cdc_id, username FROM users WHERE id = ?',
+      [user.id]
+    );
+    
+    if (!userData.length) {
+      throw new Error('User not found');
+    }
+
     const [result] = await connection.query(
       `INSERT INTO announcements (
         title, 
@@ -106,16 +149,18 @@ router.post('/', authenticate, upload.single('attachment'), async (req, res) => 
         author_name, 
         age_filter, 
         attachment_path, 
-        attachment_name
-      ) VALUES (?, ?, ?, ?, ?, ?, ?)`,
+        attachment_name,
+        cdc_id
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
       [
         title,
         message,
         user.id,
-        user.username || 'Unknown',
+        userData[0].username || 'Unknown',
         ageFilter,
         file ? file.path : null,
-        file ? file.originalname : null
+        file ? file.originalname : null,
+        userData[0].cdc_id
       ]
     );
 
