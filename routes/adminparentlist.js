@@ -18,48 +18,51 @@ router.get('/', async (req, res) => {
     const decoded = jwt.verify(token, process.env.JWT_SECRET);
     const loggedInUserId = decoded.id;
 
-    // Get connection from pool
     connection = await db.promisePool.getConnection();
 
-    // First, get the logged-in user's details
-    const [currentUser] = await connection.query(
-      'SELECT id, username, type, cdc_id FROM users WHERE id = ?', 
-      [loggedInUserId]
+    // Get logged-in admin's details
+    const [admin] = await connection.query(
+      'SELECT id, username, type, cdc_id FROM users WHERE id = ? AND type = ?', 
+      [loggedInUserId, 'admin']
     );
 
-    if (!currentUser.length) {
-      throw new Error('User not found');
+    if (!admin.length) {
+      return res.status(403).json({ 
+        success: false, 
+        message: 'Only administrators can access this resource' 
+      });
     }
 
-    const loggedInUser = currentUser[0];
-    
-    // Verify the logged-in user is an admin
-    if (loggedInUser.type !== 'admin') {
-      throw new Error('Only administrators can view this list');
-    }
+    const adminCDC = admin[0].cdc_id;
 
-    // Only show parents with the same cdc_id
+    // Get parents from the same CDC
     let query = `
-      SELECT id, username, type, cdc_id 
+      SELECT id, username, type, cdc_id, profile_pic 
       FROM users 
       WHERE type = 'parent' 
       AND cdc_id = ?
     `;
-    const params = [loggedInUser.cdc_id];
+    const params = [adminCDC];
     
     if (search) {
       query += ' AND username LIKE ?';
       params.push(`%${search}%`);
     }
     
-    const [results] = await connection.query(query, params);
+    const [parents] = await connection.query(query, params);
     
-    res.json({ success: true, parents: results });
+    res.json({ 
+      success: true, 
+      parents: parents.map(p => ({
+        ...p,
+        profile_pic: p.profile_pic || null // Ensure profile_pic is always defined
+      }))
+    });
   } catch (err) {
-    console.error('Error fetching parent accounts:', err);
+    console.error('Error:', err);
     res.status(500).json({ 
       success: false, 
-      message: 'Failed to fetch parent accounts',
+      message: 'Internal server error',
       error: process.env.NODE_ENV === 'development' ? err.message : undefined
     });
   } finally {
