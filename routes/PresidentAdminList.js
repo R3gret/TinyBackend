@@ -1,10 +1,11 @@
 const express = require('express');
 const router = express.Router();
+const db = require('../db'); // Make sure this points to your db connection file
 const jwt = require('jsonwebtoken');
-const { withConnection } = require('../db'); // Make sure this path is correct
 
 // Get admins for the president's CDC
 router.get('/', async (req, res) => {
+  let connection;
   try {
     const { search } = req.query;
     
@@ -17,44 +18,43 @@ router.get('/', async (req, res) => {
     const decoded = jwt.verify(token, process.env.JWT_SECRET);
     const loggedInUserId = decoded.id;
 
-    const users = await withConnection(async (connection) => {
-      // First, get the logged-in user's details including cdc_id
-      const [currentUser] = await connection.query(
-        'SELECT id, username, type, cdc_id FROM users WHERE id = ?', 
-        [loggedInUserId]
-      );
+    // Get connection from pool
+    connection = await db.promisePool.getConnection();
 
-      if (!currentUser.length) {
-        throw new Error('User not found');
-      }
+    // First, get the logged-in user's details
+    const [currentUser] = await connection.query(
+      'SELECT id, username, type, cdc_id FROM users WHERE id = ?', 
+      [loggedInUserId]
+    );
 
-      const loggedInUser = currentUser[0];
-      
-      // Verify the logged-in user is a president
-      if (loggedInUser.type !== 'president') {
-        throw new Error('Only presidents can view this list');
-      }
+    if (!currentUser.length) {
+      throw new Error('User not found');
+    }
 
-      // Only show admins with the same cdc_id as the president
-      let query = `
-        SELECT id, username, type, profile_pic 
-        FROM users 
-        WHERE type = 'admin' 
-        AND cdc_id = ?
-      `;
-      const params = [loggedInUser.cdc_id];
-      
-      // Add search filter if provided
-      if (search) {
-        query += ' AND username LIKE ?';
-        params.push(`%${search}%`);
-      }
-      
-      const [results] = await connection.query(query, params);
-      return results;
-    });
+    const loggedInUser = currentUser[0];
+    
+    // Verify the logged-in user is a president
+    if (loggedInUser.type !== 'president') {
+      throw new Error('Only presidents can view this list');
+    }
 
-    res.json({ success: true, users });
+    // Only show admins with the same cdc_id
+    let query = `
+      SELECT id, username, type, profile_pic 
+      FROM users 
+      WHERE type = 'admin' 
+      AND cdc_id = ?
+    `;
+    const params = [loggedInUser.cdc_id];
+    
+    if (search) {
+      query += ' AND username LIKE ?';
+      params.push(`%${search}%`);
+    }
+    
+    const [results] = await connection.query(query, params);
+    
+    res.json({ success: true, users: results });
   } catch (err) {
     console.error('Error in PresidentAdminList:', err);
     res.status(500).json({ 
@@ -62,8 +62,9 @@ router.get('/', async (req, res) => {
       message: 'Failed to fetch administrators',
       error: process.env.NODE_ENV === 'development' ? err.message : undefined
     });
+  } finally {
+    if (connection) connection.release();
   }
 });
 
-// Make sure to export the router
 module.exports = router;
