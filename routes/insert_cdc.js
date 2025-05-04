@@ -241,10 +241,10 @@ router.put('/users/cdc/:id', [
   }
 });
 
-// Get all admin users with filtering
 router.get('/preslist', async (req, res) => {
   try {
     const { search } = req.query;
+    console.log('Fetching admin users with search:', search); // Debug log
     
     const users = await withConnection(async (connection) => {
       let query = 'SELECT id, username, type, profile_pic FROM users WHERE type = "admin"';
@@ -255,16 +255,19 @@ router.get('/preslist', async (req, res) => {
         params.push(`%${search}%`);
       }
       
+      console.log('Executing query:', query, params); // Debug log
       const [results] = await connection.query(query, params);
       return results;
     });
 
+    console.log('Found users:', users); // Debug log
     res.json({ success: true, users });
   } catch (err) {
+    console.error('Error in /preslist:', err); // Detailed error log
     res.status(500).json({ 
       success: false, 
       message: 'Failed to fetch admin users',
-      error: process.env.NODE_ENV === 'development' ? err.message : undefined
+      error: err.message // Include actual error message
     });
   }
 });
