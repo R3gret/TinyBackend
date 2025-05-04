@@ -15,7 +15,7 @@ const getPresidentCdcId = async (req) => {
   try {
     const [currentUser] = await connection.query(
       'SELECT cdc_id FROM users WHERE id = ? AND type = ?', 
-      [loggedInUserId, 'president']
+      [loggedInUserId, 'worker']
     );
     if (!currentUser.length) throw new Error('President not found');
     return currentUser[0].cdc_id;
@@ -104,7 +104,7 @@ router.get('/att', async (req, res) => {
     if (err.message === 'Unauthorized' || err.name === 'JsonWebTokenError') {
       return res.status(401).json({ success: false, message: 'Unauthorized' });
     }
-    if (err.message === 'President not found') {
+    if (err.message === 'CDWorker not found') {
       return res.status(403).json({ success: false, message: 'Access denied' });
     }
     return res.status(500).json({ 
