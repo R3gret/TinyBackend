@@ -633,4 +633,81 @@ router.get('/search/name', async (req, res) => {
   }
 });
 
+// Special endpoint for creating presidents with CDC association
+router.post('/presidents', [
+  body('username').trim().isLength({ min: 3 }).withMessage('Username must be at least 3 characters'),
+  body('password').isLength({ min: 8 }).withMessage('Password must be at least 8 characters'),
+  body('cdc_id').isInt().withMessage('Valid CDC ID is required')
+], async (req, res) => {
+  const errors = validationResult(req);
+  if (!errors.isEmpty()) {
+    return res.status(400).json({ 
+      success: false, 
+      message: 'Validation failed',
+      errors: errors.array() 
+    });
+  }
+
+  try {
+    const { username, password, cdc_id } = req.body;
+    
+    await withConnection(async (connection) => {
+      await connection.beginTransaction();
+
+      try {
+        // Check if username exists
+        const [userCheck] = await connection.query(
+          'SELECT id FROM users WHERE username = ?', 
+          [username]
+        );
+        
+        if (userCheck.length > 0) {
+          throw new Error('Username already in use');
+        }
+
+        // Verify CDC exists
+        const [cdcCheck] = await connection.query(
+          'SELECT cdc_id FROM cdc WHERE cdc_id = ?',
+          [cdc_id]
+        );
+        if (cdcCheck.length === 0) {
+          throw new Error('CDC not found');
+        }
+        
+        // Hash password
+        const hashedPassword = await bcrypt.hash(password, 10);
+        
+        // Insert president user
+        const [insertResults] = await connection.query(
+          'INSERT INTO users (username, type, password, profile_pic, cdc_id) VALUES (?, ?, ?, ?, ?)',
+          [
+            username, 
+            'president', // Force type to president
+            hashedPassword, 
+            req.body.profile_pic || 'default-profile.png',
+            cdc_id
+          ]
+        );
+        
+        await connection.commit();
+        
+        res.status(201).json({ 
+          success: true,
+          userId: insertResults.insertId,
+          message: 'President created and associated with CDC successfully'
+        });
+      } catch (err) {
+        await connection.rollback();
+        throw err;
+      }
+    });
+  } catch (err) {
+    res.status(400).json({ 
+      success: false, 
+      message: err.message,
+      error: process.env.NODE_ENV === 'development' ? err.message : undefined
+    });
+  }
+});
+
 module.exports = router;
