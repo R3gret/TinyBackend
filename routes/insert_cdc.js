@@ -123,7 +123,6 @@ router.get('/admins/search', async (req, res) => {
   }
 });
 
-// Add this endpoint near your other user-related endpoints in insert_cdc.js
 router.put('/users/cdc/:id', [
   body('username').trim().isLength({ min: 3 }).optional(),
   body('type').isIn(['admin', 'worker', 'parent', 'president']).optional(),
@@ -139,7 +138,7 @@ router.put('/users/cdc/:id', [
   }
 
   try {
-    const { username, type, profile_pic, password, cdc_id } = req.body;
+    const { username, type, password, cdc_id } = req.body;
     const userId = req.params.id;
     
     await withConnection(async (connection) => {
@@ -168,17 +167,6 @@ router.put('/users/cdc/:id', [
           }
         }
 
-        // Validate CDC exists if provided
-        if (cdc_id) {
-          const [cdcCheck] = await connection.query(
-            'SELECT id FROM cdc WHERE cdc_id = ?',
-            [cdc_id]
-          );
-          if (cdcCheck.length === 0) {
-            throw new Error('CDC not found');
-          }
-        }
-
         // Handle password update if provided
         let hashedPassword = userCheck[0].password;
         if (password) {
@@ -190,11 +178,10 @@ router.put('/users/cdc/:id', [
 
         // Update user
         const [results] = await connection.query(
-          'UPDATE users SET username = ?, type = ?, profile_pic = ?, password = ? WHERE id = ?',
+          'UPDATE users SET username = ?, type = ?, password = ? WHERE id = ?',
           [
             username || userCheck[0].username,
             type || userCheck[0].type,
-            profile_pic || userCheck[0].profile_pic,
             hashedPassword,
             userId
           ]
@@ -204,21 +191,33 @@ router.put('/users/cdc/:id', [
           throw new Error('Failed to update user');
         }
 
-        // Update CDC association if user is president
-        if (type === 'president' || userCheck[0].type === 'president') {
+        // Handle CDC association (whether updating or removing)
+        if (type === 'president') {
           if (cdc_id) {
-            await connection.query(
-              'INSERT INTO cdc_presidents (user_id, cdc_id) VALUES (?, ?) ' +
-              'ON DUPLICATE KEY UPDATE cdc_id = ?',
-              [userId, cdc_id, cdc_id]
+            // Verify CDC exists
+            const [cdcCheck] = await connection.query(
+              'SELECT cdc_id FROM cdc WHERE cdc_id = ?',
+              [cdc_id]
             );
-          } else if (userCheck[0].type === 'president' && type !== 'president') {
-            // Remove CDC association if changing from president to another type
+            
+            if (cdcCheck.length === 0) {
+              throw new Error('CDC not found');
+            }
+
+            // Update or create association
             await connection.query(
-              'DELETE FROM cdc_presidents WHERE user_id = ?',
-              [userId]
+              'UPDATE users SET cdc_id = ? WHERE id = ?',
+              [cdc_id, userId]
             );
+          } else {
+            throw new Error('CDC ID is required for president');
           }
+        } else if (userCheck[0].type === 'president' && type !== 'president') {
+          // Remove CDC association if changing from president to another type
+          await connection.query(
+            'UPDATE users SET cdc_id = NULL WHERE id = ?',
+            [userId]
+          );
         }
 
         await connection.commit();
