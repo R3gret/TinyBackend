@@ -1,6 +1,6 @@
 const express = require('express');
 const router = express.Router();
-const db = require('../db'); // Make sure this points to your db connection file
+const db = require('../db'); // Make sure this points to your db connection files
 const jwt = require('jsonwebtoken');
 
 // Get admins for the president's CDC
