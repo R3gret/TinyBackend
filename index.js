@@ -53,6 +53,7 @@ app.use('/api/cdc', require('./routes/insert_cdc'));
 app.use('/api/pres', require('./routes/PresidentAdminList'));
 app.use('/api/parent', require('./routes/parent'));
 app.use('/api/admin', require('./routes/adminparentlist'));
+app.use('/api/dash', require('./routes/studentsdash'));
 
 // Static files
 app.use('/uploads/announcements', express.static(path.join(__dirname, 'uploads/announcements')));
