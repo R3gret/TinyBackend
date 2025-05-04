@@ -241,6 +241,34 @@ router.put('/users/cdc/:id', [
   }
 });
 
+// Get all admin users with filtering
+router.get('/', async (req, res) => {
+  try {
+    const { search } = req.query;
+    
+    const users = await withConnection(async (connection) => {
+      let query = 'SELECT id, username, type, profile_pic FROM users WHERE type = "admin"';
+      const params = [];
+      
+      if (search) {
+        query += ' AND username LIKE ?';
+        params.push(`%${search}%`);
+      }
+      
+      const [results] = await connection.query(query, params);
+      return results;
+    });
+
+    res.json({ success: true, users });
+  } catch (err) {
+    res.status(500).json({ 
+      success: false, 
+      message: 'Failed to fetch admin users',
+      error: process.env.NODE_ENV === 'development' ? err.message : undefined
+    });
+  }
+});
+
   // Create CDC endpoint
   router.post('/', async (req, res) => {
     const missingFields = validateCDCData(req.body);
