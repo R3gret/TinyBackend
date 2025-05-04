@@ -3,6 +3,7 @@ const router = express.Router();
 const db = require('../db');
 const bcrypt = require('bcryptjs');
 const { body, validationResult } = require('express-validator');
+const jwt = require('jsonwebtoken'); // Add this line at the top
 
 // Get current user's full details
 router.get('/current-user/details', async (req, res) => {
