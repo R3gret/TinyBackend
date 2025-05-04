@@ -14,8 +14,8 @@ const getPresidentCdcId = async (req) => {
   const connection = await db.promisePool.getConnection();
   try {
     const [currentUser] = await connection.query(
-      'SELECT cdc_id FROM users WHERE id = ? AND type = "president"', 
-      [loggedInUserId]
+      'SELECT cdc_id FROM users WHERE id = ? AND type = ?', 
+      [loggedInUserId, 'president']  // Using parameterized query
     );
     if (!currentUser.length) throw new Error('President not found');
     return currentUser[0].cdc_id;
