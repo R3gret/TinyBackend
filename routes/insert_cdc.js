@@ -417,4 +417,177 @@ router.delete('/:id', async (req, res) => {
   }
 });
 
+// User-CDC Association Endpoints (simplified version for your schema)
+
+// Associate user with CDC (or update existing association)
+router.post('/:cdcId/users', async (req, res) => {
+  const { cdcId } = req.params;
+  const { userId } = req.body;
+
+  if (!userId) {
+    return res.status(400).json({
+      success: false,
+      message: 'User ID is required'
+    });
+  }
+
+  let connection;
+  try {
+    connection = await db.promisePool.getConnection();
+    await connection.beginTransaction();
+
+    // Check if CDC exists
+    const [cdcCheck] = await connection.query(
+      'SELECT cdc_id FROM cdc WHERE cdc_id = ?',
+      [cdcId]
+    );
+
+    if (cdcCheck.length === 0) {
+      await connection.rollback();
+      return res.status(404).json({
+        success: false,
+        message: 'CDC not found'
+      });
+    }
+
+    // Check if user exists
+    const [userCheck] = await connection.query(
+      'SELECT id FROM users WHERE id = ?',
+      [userId]
+    );
+
+    if (userCheck.length === 0) {
+      await connection.rollback();
+      return res.status(404).json({
+        success: false,
+        message: 'User not found'
+      });
+    }
+
+    // Update user's cdc_id directly
+    await connection.query(
+      'UPDATE users SET cdc_id = ? WHERE id = ?',
+      [cdcId, userId]
+    );
+
+    await connection.commit();
+
+    res.status(200).json({
+      success: true,
+      message: 'User successfully associated with CDC'
+    });
+
+  } catch (err) {
+    if (connection) await connection.rollback();
+    handleDatabaseError(err, res);
+  } finally {
+    if (connection) await connection.release();
+  }
+});
+
+// Get all users associated with a CDC
+router.get('/:cdcId/users', async (req, res) => {
+  const { cdcId } = req.params;
+
+  try {
+    const users = await withConnection(async (connection) => {
+      const [results] = await connection.query(
+        `SELECT id, username, type 
+         FROM users
+         WHERE cdc_id = ?`,
+        [cdcId]
+      );
+      return results;
+    });
+
+    res.json({ success: true, users });
+  } catch (err) {
+    res.status(500).json({ 
+      success: false, 
+      message: 'Failed to fetch CDC users',
+      error: process.env.NODE_ENV === 'development' ? err.message : undefined
+    });
+  }
+});
+
+// Remove user from CDC (set cdc_id to NULL)
+router.delete('/:cdcId/users/:userId', async (req, res) => {
+  const { cdcId, userId } = req.params;
+
+  let connection;
+  try {
+    connection = await db.promisePool.getConnection();
+    await connection.beginTransaction();
+
+    // Check if user exists and is associated with this CDC
+    const [userCheck] = await connection.query(
+      'SELECT id FROM users WHERE id = ? AND cdc_id = ?',
+      [userId, cdcId]
+    );
+
+    if (userCheck.length === 0) {
+      await connection.rollback();
+      return res.status(404).json({
+        success: false,
+        message: 'User not found or not associated with this CDC'
+      });
+    }
+
+    // Remove association by setting cdc_id to NULL
+    await connection.query(
+      'UPDATE users SET cdc_id = NULL WHERE id = ?',
+      [userId]
+    );
+
+    await connection.commit();
+
+    res.json({
+      success: true,
+      message: 'User removed from CDC successfully'
+    });
+
+  } catch (err) {
+    if (connection) await connection.rollback();
+    handleDatabaseError(err, res);
+  } finally {
+    if (connection) await connection.release();
+  }
+});
+
+// Search CDCs by name or location (unchanged from previous version)
+router.get('/search', async (req, res) => {
+  const { query } = req.query;
+
+  if (!query) {
+    return res.status(400).json({
+      success: false,
+      message: 'Search query is required'
+    });
+  }
+
+  try {
+    const cdcs = await withConnection(async (connection) => {
+      const searchTerm = `%${query}%`;
+      const [results] = await connection.query(
+        `SELECT c.cdc_id as cdcId, c.name, cl.Region as region, 
+                cl.province, cl.municipality, cl.barangay
+         FROM cdc c
+         JOIN cdc_location cl ON c.location_id = cl.location_id
+         WHERE c.name LIKE ? OR cl.province LIKE ? OR cl.municipality LIKE ? OR cl.barangay LIKE ?
+         LIMIT 20`,
+        [searchTerm, searchTerm, searchTerm, searchTerm]
+      );
+      return results;
+    });
+
+    res.json({ success: true, data: cdcs });
+  } catch (err) {
+    res.status(500).json({ 
+      success: false, 
+      message: 'Failed to search CDCs',
+      error: process.env.NODE_ENV === 'development' ? err.message : undefined
+    });
+  }
+});
+
 module.exports = router;
