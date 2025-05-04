@@ -123,7 +123,7 @@ router.get('/admins/search', async (req, res) => {
   }
 });
 
-router.put('/users/cdc/:id', [
+router.put('/users/:id', [
   body('username').trim().isLength({ min: 3 }).optional(),
   body('type').isIn(['admin', 'worker', 'parent', 'president']).optional(),
   body('cdc_id').isInt().optional()
@@ -144,99 +144,64 @@ router.put('/users/cdc/:id', [
     await withConnection(async (connection) => {
       await connection.beginTransaction();
 
-      try {
-        // Check if user exists
-        const [userCheck] = await connection.query(
-          'SELECT * FROM users WHERE id = ?', 
-          [userId]
+      // Get current user data
+      const [userCheck] = await connection.query(
+        'SELECT * FROM users WHERE id = ?', 
+        [userId]
+      );
+      
+      if (userCheck.length === 0) {
+        throw new Error('User not found');
+      }
+
+      const currentUser = userCheck[0];
+
+      // Handle CDC validation for president
+      if (type === 'president' || (type === undefined && currentUser.type === 'president')) {
+        // Use new cdc_id if provided, otherwise keep existing if not changing type
+        const effectiveCdcId = type === 'president' 
+          ? (cdc_id || currentUser.cdc_id)
+          : cdc_id;
+
+        if (!effectiveCdcId) {
+          throw new Error('CDC ID is required for president');
+        }
+
+        // Verify CDC exists
+        const [cdcCheck] = await connection.query(
+          'SELECT 1 FROM cdc WHERE cdc_id = ? LIMIT 1',
+          [effectiveCdcId]
         );
         
-        if (userCheck.length === 0) {
-          throw new Error('User not found');
+        if (cdcCheck.length === 0) {
+          throw new Error('CDC not found');
         }
-
-        // Check for duplicate username if changed
-        if (username && username !== userCheck[0].username) {
-          const [existingUsers] = await connection.query(
-            'SELECT id FROM users WHERE username = ? AND id != ?', 
-            [username, userId]
-          );
-
-          if (existingUsers.length > 0) {
-            throw new Error('Username already in use');
-          }
-        }
-
-        // Handle password update if provided
-        let hashedPassword = userCheck[0].password;
-        if (password) {
-          if (password.length < 8) {
-            throw new Error('Password must be at least 8 characters');
-          }
-          hashedPassword = await bcrypt.hash(password, 10);
-        }
-
-        // Update user
-        const [results] = await connection.query(
-          'UPDATE users SET username = ?, type = ?, password = ? WHERE id = ?',
-          [
-            username || userCheck[0].username,
-            type || userCheck[0].type,
-            hashedPassword,
-            userId
-          ]
-        );
-
-        if (results.affectedRows === 0) {
-          throw new Error('Failed to update user');
-        }
-
-        // Handle CDC association (whether updating or removing)
-        if (type === 'president') {
-          if (cdc_id) {
-            // Verify CDC exists
-            const [cdcCheck] = await connection.query(
-              'SELECT cdc_id FROM cdc WHERE cdc_id = ?',
-              [cdc_id]
-            );
-            
-            if (cdcCheck.length === 0) {
-              throw new Error('CDC not found');
-            }
-
-            // Update or create association
-            await connection.query(
-              'UPDATE users SET cdc_id = ? WHERE id = ?',
-              [cdc_id, userId]
-            );
-          } else {
-            throw new Error('CDC ID is required for president');
-          }
-        } else if (userCheck[0].type === 'president' && type !== 'president') {
-          // Remove CDC association if changing from president to another type
-          await connection.query(
-            'UPDATE users SET cdc_id = NULL WHERE id = ?',
-            [userId]
-          );
-        }
-
-        await connection.commit();
-      } catch (err) {
-        await connection.rollback();
-        throw err;
       }
-    });
 
-    res.json({ 
-      success: true,
-      message: 'User updated successfully'
+      // Rest of your update logic...
+      const [results] = await connection.query(
+        'UPDATE users SET username = ?, type = ?, password = ?, cdc_id = ? WHERE id = ?',
+        [
+          username || currentUser.username,
+          type || currentUser.type,
+          password ? await bcrypt.hash(password, 10) : currentUser.password,
+          type === 'president' ? (cdc_id || currentUser.cdc_id) : null,
+          userId
+        ]
+      );
+
+      await connection.commit();
+      
+      res.json({ 
+        success: true,
+        message: 'User updated successfully'
+      });
     });
   } catch (err) {
-    const status = err.message === 'User not found' || err.message === 'CDC not found' ? 404 : 400;
+    const status = err.message.includes('not found') ? 404 : 400;
     res.status(status).json({ 
       success: false, 
-      message: err.message,
-      error: process.env.NODE_ENV === 'development' ? err.message : undefined
+      message: err.message
     });
   }
 });
