@@ -242,8 +242,12 @@ router.put('/users/cdc/:id', [
 });
 
 router.get('/preslist', async (req, res) => {
+  const { search, province, municipality, barangay } = req.query;
+  let connection;
+
   try {
-    const { search, province, municipality, barangay } = req.query;
+    // Get a connection from the pool
+    connection = await db.promisePool.getConnection();
     
     let query = `
       SELECT 
@@ -284,28 +288,44 @@ router.get('/preslist', async (req, res) => {
       query += ` AND cl.barangay = ?`;
       params.push(barangay);
     }
-    
-    const [users] = await db.query(query, params);
-    
+
+    // Execute query using the connection
+    const [rows] = await connection.query(query, params);
+
+    // Format response
+    const users = rows.map(row => ({
+      id: row.id,
+      username: row.username,
+      profile_pic: row.profile_pic,
+      cdc_location: {
+        region: row.region,
+        province: row.province,
+        municipality: row.municipality,
+        barangay: row.barangay
+      }
+    }));
+
     res.json({
       success: true,
-      users: users.map(user => ({
-        ...user,
-        cdc_location: {
-          region: user.region,
-          province: user.province,
-          municipality: user.municipality,
-          barangay: user.barangay
-        }
-      }))
+      users
     });
-    
+
   } catch (error) {
     console.error('Error fetching president list:', error);
     res.status(500).json({
       success: false,
-      message: 'Failed to fetch president list'
+      message: 'Failed to fetch president list',
+      error: error.message
     });
+  } finally {
+    // Always release the connection back to the pool
+    if (connection) {
+      try {
+        await connection.release();
+      } catch (releaseErr) {
+        console.error('Error releasing connection:', releaseErr);
+      }
+    }
   }
 });
 
