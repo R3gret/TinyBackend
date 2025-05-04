@@ -1,3 +1,8 @@
+const express = require('express');
+const router = express.Router();
+const db = require('../db');
+const jwt = require('jsonwebtoken');
+
 router.get('/', async (req, res) => {
     const { ageFilter } = req.query;
     let connection;
@@ -105,3 +110,5 @@ router.get('/', async (req, res) => {
       if (connection) connection.release();
     }
   });
+
+  module.exports = router;
