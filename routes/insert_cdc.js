@@ -244,30 +244,27 @@ router.put('/users/cdc/:id', [
 router.get('/preslist', async (req, res) => {
   try {
     const { search } = req.query;
-    console.log('Fetching admin users with search:', search); // Debug log
     
     const users = await withConnection(async (connection) => {
-      let query = 'SELECT id, username, type, profile_pic FROM users WHERE type = "admin"';
-      const params = [];
+      let query = 'SELECT id, username, type, profile_pic FROM users WHERE type = ?';
+      const params = ['admin'];  // Using parameterized query
       
       if (search) {
         query += ' AND username LIKE ?';
         params.push(`%${search}%`);
       }
       
-      console.log('Executing query:', query, params); // Debug log
       const [results] = await connection.query(query, params);
       return results;
     });
 
-    console.log('Found users:', users); // Debug log
     res.json({ success: true, users });
   } catch (err) {
-    console.error('Error in /preslist:', err); // Detailed error log
+    console.error('Database error:', err);
     res.status(500).json({ 
       success: false, 
       message: 'Failed to fetch admin users',
-      error: err.message // Include actual error message
+      error: process.env.NODE_ENV === 'development' ? err.message : undefined
     });
   }
 });
