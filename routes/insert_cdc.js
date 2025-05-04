@@ -1,6 +1,7 @@
 const express = require('express');
 const router = express.Router();
 const db = require('../db');
+const { body, validationResult } = require('express-validator');
 
 // Enhanced database error handler
 const handleDatabaseError = (err, res) => {
