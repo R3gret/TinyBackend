@@ -54,6 +54,7 @@ app.use('/api/pres', require('./routes/PresidentAdminList'));
 app.use('/api/parent', require('./routes/parent'));
 app.use('/api/admin', require('./routes/adminparentlist'));
 app.use('/api/dash', require('./routes/studentsdash'));
+app.use('/api/att', require('./routes/studattendance'));
 
 // Static files
 app.use('/uploads/announcements', express.static(path.join(__dirname, 'uploads/announcements')));
