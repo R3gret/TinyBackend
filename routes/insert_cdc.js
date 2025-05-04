@@ -65,8 +65,8 @@ router.post('/', async (req, res) => {
 
     // Insert CDC reference
     const [cdcResults] = await connection.query(
-      `INSERT INTO cdc (location_id, name) VALUES (?, ?)`,
-      [locationId, name]
+      `INSERT INTO cdc (location_id) VALUES (?)`,
+      [locationId]
     );
 
     await connection.commit();
@@ -100,60 +100,6 @@ router.post('/', async (req, res) => {
   }
 });
 
-// Get CDC by ID
-router.get('/:id', async (req, res) => {
-  const { id } = req.params;
-
-  try {
-    const connection = await db.promisePool.getConnection();
-    
-    try {
-      const query = `
-        SELECT 
-          c.cdc_id as cdcId,
-          c.name as name,
-          cl.Region as region,
-          cl.province as province,
-          cl.municipality as municipality,
-          cl.barangay as barangay
-        FROM cdc c
-        JOIN cdc_location cl ON c.location_id = cl.location_id
-        WHERE c.cdc_id = ?
-      `;
-      
-      const [results] = await connection.query(query, [id]);
-      
-      if (results.length === 0) {
-        return res.status(404).json({
-          success: false,
-          message: 'CDC not found'
-        });
-      }
-      
-      res.json({
-        success: true,
-        data: results[0]
-      });
-      
-    } catch (err) {
-      console.error('Database error:', err);
-      res.status(500).json({
-        success: false,
-        message: 'Database operation failed',
-        error: err.message
-      });
-    } finally {
-      await connection.release();
-    }
-  } catch (err) {
-    res.status(500).json({
-      success: false,
-      message: 'Internal server error'
-    });
-  }
-});
-
-// Get all CDCs with filtering and pagination
 router.get('/', async (req, res) => {
   const { province, municipality, barangay, page = 1, limit = 20 } = req.query;
   
@@ -166,10 +112,10 @@ router.get('/', async (req, res) => {
     try {
       connection = await db.promisePool.getConnection();
 
+      // Updated query with correct column names
       let query = `
         SELECT 
           c.cdc_id as cdcId,
-          c.name as name,
           cl.Region as region,
           cl.province as province,
           cl.municipality as municipality,
