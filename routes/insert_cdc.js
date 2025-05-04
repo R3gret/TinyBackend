@@ -590,4 +590,47 @@ router.get('/search', async (req, res) => {
   }
 });
 
+// Search CDCs by name only
+router.get('/search/name', async (req, res) => {
+  const { name } = req.query;
+
+  if (!name || name.trim() === '') {
+    return res.status(400).json({
+      success: false,
+      message: 'Name query parameter is required'
+    });
+  }
+
+  let connection;
+  try {
+    connection = await db.promisePool.getConnection();
+    const searchTerm = `%${name}%`;
+    
+    const [results] = await connection.query(
+      `SELECT c.cdc_id as cdcId, c.name, cl.Region as region, 
+              cl.province, cl.municipality, cl.barangay
+       FROM cdc c
+       JOIN cdc_location cl ON c.location_id = cl.location_id
+       WHERE c.name LIKE ?
+       LIMIT 20`,
+      [searchTerm]
+    );
+
+    res.json({ 
+      success: true,
+      data: results
+    });
+
+  } catch (err) {
+    console.error('Name Search Error:', err);
+    res.status(500).json({ 
+      success: false, 
+      message: 'Failed to search CDCs by name',
+      error: process.env.NODE_ENV === 'development' ? err.message : undefined
+    });
+  } finally {
+    if (connection) await connection.release();
+  }
+});
+
 module.exports = router;
