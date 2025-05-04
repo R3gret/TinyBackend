@@ -243,31 +243,72 @@ router.put('/users/cdc/:id', [
 
 router.get('/preslist', async (req, res) => {
   try {
-    const { search } = req.query;
+    const { search, province, municipality, barangay } = req.query;
     
-    const users = await withConnection(async (connection) => {
-      let query = 'SELECT id, username, type, profile_pic FROM users WHERE type = ?';
-      const params = ['president'];  // Using parameterized query
-      
-      if (search) {
-        query += ' AND username LIKE ?';
-        params.push(`%${search}%`);
-      }
-      
-      const [results] = await connection.query(query, params);
-      return results;
+    let query = `
+      SELECT 
+        u.id, 
+        u.username, 
+        u.profile_pic,
+        cl.Region as region,
+        cl.province,
+        cl.municipality,
+        cl.barangay
+      FROM users u
+      LEFT JOIN cdc c ON u.cdc_id = c.cdc_id
+      LEFT JOIN cdc_location cl ON c.location_id = cl.location_id
+      WHERE u.type = 'president'
+    `;
+    
+    const params = [];
+    
+    // Add search filter
+    if (search) {
+      query += ` AND (u.username LIKE ? OR cl.province LIKE ? OR cl.municipality LIKE ? OR cl.barangay LIKE ?)`;
+      const searchParam = `%${search}%`;
+      params.push(searchParam, searchParam, searchParam, searchParam);
+    }
+    
+    // Add location filters
+    if (province) {
+      query += ` AND cl.province = ?`;
+      params.push(province);
+    }
+    
+    if (municipality) {
+      query += ` AND cl.municipality = ?`;
+      params.push(municipality);
+    }
+    
+    if (barangay) {
+      query += ` AND cl.barangay = ?`;
+      params.push(barangay);
+    }
+    
+    const [users] = await db.query(query, params);
+    
+    res.json({
+      success: true,
+      users: users.map(user => ({
+        ...user,
+        cdc_location: {
+          region: user.region,
+          province: user.province,
+          municipality: user.municipality,
+          barangay: user.barangay
+        }
+      }))
     });
-
-    res.json({ success: true, users });
-  } catch (err) {
-    console.error('Database error:', err);
-    res.status(500).json({ 
-      success: false, 
-      message: 'Failed to fetch admin users',
-      error: process.env.NODE_ENV === 'development' ? err.message : undefined
+    
+  } catch (error) {
+    console.error('Error fetching president list:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Failed to fetch president list'
     });
   }
 });
+
 
   // Create CDC endpoint
   router.post('/', async (req, res) => {
