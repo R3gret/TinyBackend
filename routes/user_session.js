@@ -333,4 +333,41 @@ router.put('/change-password', [
   }
 });
 
+router.get('/current-user', async (req, res) => {
+  let connection;
+  try {
+    const token = req.headers.authorization?.split(' ')[1];
+    if (!token) {
+      return res.status(401).json({ success: false, message: 'Unauthorized' });
+    }
+
+    const decoded = jwt.verify(token, process.env.JWT_SECRET);
+    const userId = decoded.id;
+
+    connection = await db.promisePool.getConnection();
+    const [user] = await connection.query(
+      'SELECT id, username, type, cdc_id FROM users WHERE id = ?',
+      [userId]
+    );
+
+    if (user.length === 0) {
+      return res.status(404).json({ success: false, message: 'User not found' });
+    }
+
+    res.json({ 
+      success: true, 
+      user: user[0] 
+    });
+  } catch (err) {
+    console.error('Error:', err);
+    res.status(500).json({ 
+      success: false, 
+      message: 'Server error',
+      error: process.env.NODE_ENV === 'development' ? err.message : undefined
+    });
+  } finally {
+    if (connection) connection.release();
+  }
+});
+
 module.exports = router;
