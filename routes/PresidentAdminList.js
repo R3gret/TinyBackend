@@ -1,7 +1,7 @@
 const express = require('express');
 const router = express.Router();
 const jwt = require('jsonwebtoken');
-const db = require('../db');
+const { withConnection } = require('../db'); // Make sure this path is correct
 
 // Get admins for the president's CDC
 router.get('/', async (req, res) => {
