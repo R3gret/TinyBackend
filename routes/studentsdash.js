@@ -120,4 +120,68 @@ router.get('/age-distribution', async (req, res) => {
   }
 });
 
+// New route to get gender distribution
+router.get('/gender-distribution', async (req, res) => {
+  const { ageFilter } = req.query;
+  
+  let query = 'SELECT gender, COUNT(*) as count FROM students';
+  const params = [];
+  
+  if (ageFilter) {
+    // Calculate date ranges based on age filter using native Date
+    const today = new Date();
+    let minDate, maxDate;
+    
+    switch(ageFilter) {
+      case '3-4':
+        maxDate = new Date(today.getFullYear() - 3, today.getMonth(), today.getDate());
+        minDate = new Date(today.getFullYear() - 4, today.getMonth(), today.getDate());
+        break;
+      case '4-5':
+        maxDate = new Date(today.getFullYear() - 4, today.getMonth(), today.getDate());
+        minDate = new Date(today.getFullYear() - 5, today.getMonth(), today.getDate());
+        break;
+      case '5-6':
+        maxDate = new Date(today.getFullYear() - 5, today.getMonth(), today.getDate());
+        minDate = new Date(today.getFullYear() - 6, today.getMonth(), today.getDate());
+        break;
+      default:
+        return res.status(400).json({ 
+          success: false, 
+          message: 'Invalid age filter' 
+        });
+    }
+    
+    query += ' WHERE birthdate BETWEEN ? AND ?';
+    params.push(minDate.toISOString().split('T')[0], maxDate.toISOString().split('T')[0]);
+  }
+  
+  query += ' GROUP BY gender';
+
+  let connection;
+  try {
+    connection = await db.promisePool.getConnection();
+    const [results] = await connection.query(query, params);
+
+    // Transform results into a more usable format
+    const distribution = {};
+    results.forEach(row => {
+      distribution[row.gender] = row.count;
+    });
+
+    return res.json({
+      success: true,
+      distribution
+    });
+  } catch (err) {
+    console.error('Database query error:', err);
+    return res.status(500).json({ 
+      success: false, 
+      message: 'Database error' 
+    });
+  } finally {
+    if (connection) connection.release();
+  }
+});
+
 module.exports = router;
