@@ -2,6 +2,7 @@ const express = require('express');
 const router = express.Router();
 const db = require('../db');
 const { body, validationResult } = require('express-validator');
+const bcrypt = require('bcryptjs');
 
 // Enhanced database error handler
 const handleDatabaseError = (err, res) => {
@@ -634,61 +635,99 @@ router.post('/presidents', [
     connection = await db.promisePool.getConnection();
     await connection.beginTransaction();
 
-    const { username, password, cdc_id } = req.body;
+    // Use both cdc_id and cdcId for compatibility
+    const cdcId = req.body.cdc_id || req.body.cdcId;
+    const { username, password } = req.body;
 
-    // Verify CDC exists
+    if (!cdcId) {
+      await connection.rollback();
+      return res.status(400).json({
+        success: false,
+        message: 'CDC ID is required'
+      });
+    }
+
+    // Verify CDC exists - more thorough check
     const [cdcCheck] = await connection.query(
-      `SELECT c.cdc_id 
-       FROM cdc c
-       WHERE c.cdc_id = ?`,
-      [cdc_id]
+      `SELECT 1 FROM cdc WHERE cdc_id = ? LIMIT 1`,
+      [cdcId]
     );
 
     if (cdcCheck.length === 0) {
       await connection.rollback();
       return res.status(404).json({
         success: false,
-        message: 'CDC not found in database',
-        details: `No CDC exists with ID: ${cdc_id}`
+        message: 'CDC not found',
+        details: `CDC with ID ${cdcId} doesn't exist`
       });
     }
 
-    // Check if username already exists
-    const [userCheck] = await connection.query(
-      'SELECT id FROM users WHERE username = ?',
+    // Check for existing username
+    const [existingUser] = await connection.query(
+      'SELECT id FROM users WHERE username = ? LIMIT 1',
       [username]
     );
     
-    if (userCheck.length > 0) {
+    if (existingUser.length > 0) {
       await connection.rollback();
-      return res.status(400).json({
+      return res.status(409).json({
         success: false,
         message: 'Username already exists'
       });
     }
 
-    // Hash password
-    const hashedPassword = await bcrypt.hash(password, 10);
+    // Hash password with error handling
+    let hashedPassword;
+    try {
+      hashedPassword = await bcrypt.hash(password, 10);
+    } catch (hashError) {
+      console.error('Password hashing failed:', hashError);
+      await connection.rollback();
+      return res.status(500).json({
+        success: false,
+        message: 'Failed to process password'
+      });
+    }
     
-    // Insert president user with CDC association
+    // Insert user with explicit field names
     const [insertResults] = await connection.query(
-      'INSERT INTO users (username, type, password, cdc_id) VALUES (?, ?, ?, ?)',
-      [username, 'president', hashedPassword, cdc_id]
+      `INSERT INTO users 
+       (username, type, password, cdc_id) 
+       VALUES (?, 'president', ?, ?)`,
+      [username, hashedPassword, cdcId]
     );
 
     await connection.commit();
     
-    res.status(201).json({ 
+    // Get the created user details
+    const [newUser] = await connection.query(
+      `SELECT id, username, type, cdc_id 
+       FROM users WHERE id = ?`,
+      [insertResults.insertId]
+    );
+
+    return res.status(201).json({ 
       success: true,
-      userId: insertResults.insertId,
-      message: 'President created and associated with CDC successfully'
+      data: newUser[0],
+      message: 'President created successfully'
     });
+
   } catch (err) {
     if (connection) await connection.rollback();
+    console.error('President creation error:', {
+      error: err.message,
+      stack: err.stack,
+      sql: err.sql,
+      sqlMessage: err.sqlMessage
+    });
+    
     res.status(500).json({ 
       success: false, 
       message: 'Failed to create president',
-      error: process.env.NODE_ENV === 'development' ? err.message : undefined
+      ...(process.env.NODE_ENV === 'development' && {
+        error: err.message,
+        details: err.sqlMessage
+      })
     });
   } finally {
     if (connection) await connection.release();
