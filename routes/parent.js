@@ -5,41 +5,82 @@ const db = require('../db');
 const jwt = require('jsonwebtoken');
 
 // Get all parent accounts
+// Get all parent accounts for the current CDC
 router.get('/', async (req, res) => {
-  let connection;
-  try {
-    connection = await db.promisePool.getConnection();
-    const [results] = await connection.query(
-      'SELECT id, username, type, cdc_id FROM users WHERE type = ?', 
-      ['parent']
-    );
-    res.json(results);
-  } catch (err) {
-    console.error('Database error:', err);
-    res.status(500).json({ error: 'Failed to fetch parent accounts' });
-  } finally {
-    if (connection) connection.release();
-  }
-});
-
-// Search parent accounts
-router.get('/search', async (req, res) => {
-  const { query } = req.query;
-  let connection;
-  try {
-    connection = await db.promisePool.getConnection();
-    const [results] = await connection.query(
-      'SELECT id, username, type, cdc_id FROM users WHERE username LIKE ? AND type = ?',
-      [`%${query}%`, 'parent']
-    );
-    res.json(results);
-  } catch (err) {
-    console.error('Database error:', err);
-    res.status(500).json({ error: 'Failed to search parent accounts' });
-  } finally {
-    if (connection) connection.release();
-  }
-});
+    let connection;
+    try {
+      // Get creator's CDC ID from JWT
+      const token = req.headers.authorization?.split(' ')[1];
+      if (!token) throw new Error('Unauthorized');
+  
+      const decoded = jwt.verify(token, process.env.JWT_SECRET);
+      const loggedInUserId = decoded.id;
+  
+      connection = await db.promisePool.getConnection();
+      
+      // Get creator's CDC ID
+      const [creator] = await connection.query(
+        'SELECT cdc_id FROM users WHERE id = ?', 
+        [loggedInUserId]
+      );
+      
+      if (!creator.length) {
+        return res.status(404).json({ error: 'User not found' });
+      }
+      
+      const cdcId = creator[0].cdc_id;
+  
+      const [results] = await connection.query(
+        'SELECT id, username, type, cdc_id FROM users WHERE type = ? AND cdc_id = ?', 
+        ['parent', cdcId]
+      );
+      res.json(results);
+    } catch (err) {
+      console.error('Database error:', err);
+      res.status(500).json({ error: 'Failed to fetch parent accounts' });
+    } finally {
+      if (connection) connection.release();
+    }
+  });
+  
+  // Search parent accounts for the current CDC
+  router.get('/search', async (req, res) => {
+    const { query } = req.query;
+    let connection;
+    try {
+      // Get creator's CDC ID from JWT
+      const token = req.headers.authorization?.split(' ')[1];
+      if (!token) throw new Error('Unauthorized');
+  
+      const decoded = jwt.verify(token, process.env.JWT_SECRET);
+      const loggedInUserId = decoded.id;
+  
+      connection = await db.promisePool.getConnection();
+      
+      // Get creator's CDC ID
+      const [creator] = await connection.query(
+        'SELECT cdc_id FROM users WHERE id = ?', 
+        [loggedInUserId]
+      );
+      
+      if (!creator.length) {
+        return res.status(404).json({ error: 'User not found' });
+      }
+      
+      const cdcId = creator[0].cdc_id;
+  
+      const [results] = await connection.query(
+        'SELECT id, username, type, cdc_id FROM users WHERE username LIKE ? AND type = ? AND cdc_id = ?',
+        [`%${query}%`, 'parent', cdcId]
+      );
+      res.json(results);
+    } catch (err) {
+      console.error('Database error:', err);
+      res.status(500).json({ error: 'Failed to search parent accounts' });
+    } finally {
+      if (connection) connection.release();
+    }
+  });
 
 // Create parent account (locked to parent type with creator's CDC ID)
 router.post('/', async (req, res) => {
