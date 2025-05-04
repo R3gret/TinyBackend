@@ -247,7 +247,7 @@ router.get('/preslist', async (req, res) => {
     
     const users = await withConnection(async (connection) => {
       let query = 'SELECT id, username, type, profile_pic FROM users WHERE type = ?';
-      const params = ['admin'];  // Using parameterized query
+      const params = ['president'];  // Using parameterized query
       
       if (search) {
         query += ' AND username LIKE ?';
