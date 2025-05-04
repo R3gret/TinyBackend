@@ -61,7 +61,7 @@ router.get('/admins', async (req, res) => {
       const [results] = await connection.query(
         `SELECT id, username, type, cdc_id 
          FROM users 
-         WHERE type = 'admin'`
+         WHERE type = 'president'`
       );
       return results;
     });
@@ -99,7 +99,7 @@ router.get('/admins/search', async (req, res) => {
       const [results] = await connection.query(
         `SELECT id, username, type, cdc_id 
          FROM users 
-         WHERE type = 'admin' AND username LIKE ?`,
+         WHERE type = 'president' AND username LIKE ?`,
         [`%${query}%`]
       );
       return results;
@@ -118,6 +118,125 @@ router.get('/admins/search', async (req, res) => {
     res.status(500).json({ 
       success: false,
       message: 'Failed to search admin users',
+      error: process.env.NODE_ENV === 'development' ? err.message : undefined
+    });
+  }
+});
+
+// Add this endpoint near your other user-related endpoints in insert_cdc.js
+router.put('/users/cdc/:id', [
+  body('username').trim().isLength({ min: 3 }).optional(),
+  body('type').isIn(['admin', 'worker', 'parent', 'president']).optional(),
+  body('cdc_id').isInt().optional()
+], async (req, res) => {
+  const errors = validationResult(req);
+  if (!errors.isEmpty()) {
+    return res.status(400).json({ 
+      success: false, 
+      message: 'Validation failed',
+      errors: errors.array() 
+    });
+  }
+
+  try {
+    const { username, type, profile_pic, password, cdc_id } = req.body;
+    const userId = req.params.id;
+    
+    await withConnection(async (connection) => {
+      await connection.beginTransaction();
+
+      try {
+        // Check if user exists
+        const [userCheck] = await connection.query(
+          'SELECT * FROM users WHERE id = ?', 
+          [userId]
+        );
+        
+        if (userCheck.length === 0) {
+          throw new Error('User not found');
+        }
+
+        // Check for duplicate username if changed
+        if (username && username !== userCheck[0].username) {
+          const [existingUsers] = await connection.query(
+            'SELECT id FROM users WHERE username = ? AND id != ?', 
+            [username, userId]
+          );
+
+          if (existingUsers.length > 0) {
+            throw new Error('Username already in use');
+          }
+        }
+
+        // Validate CDC exists if provided
+        if (cdc_id) {
+          const [cdcCheck] = await connection.query(
+            'SELECT id FROM cdc WHERE cdc_id = ?',
+            [cdc_id]
+          );
+          if (cdcCheck.length === 0) {
+            throw new Error('CDC not found');
+          }
+        }
+
+        // Handle password update if provided
+        let hashedPassword = userCheck[0].password;
+        if (password) {
+          if (password.length < 8) {
+            throw new Error('Password must be at least 8 characters');
+          }
+          hashedPassword = await bcrypt.hash(password, 10);
+        }
+
+        // Update user
+        const [results] = await connection.query(
+          'UPDATE users SET username = ?, type = ?, profile_pic = ?, password = ? WHERE id = ?',
+          [
+            username || userCheck[0].username,
+            type || userCheck[0].type,
+            profile_pic || userCheck[0].profile_pic,
+            hashedPassword,
+            userId
+          ]
+        );
+
+        if (results.affectedRows === 0) {
+          throw new Error('Failed to update user');
+        }
+
+        // Update CDC association if user is president
+        if (type === 'president' || userCheck[0].type === 'president') {
+          if (cdc_id) {
+            await connection.query(
+              'INSERT INTO cdc_presidents (user_id, cdc_id) VALUES (?, ?) ' +
+              'ON DUPLICATE KEY UPDATE cdc_id = ?',
+              [userId, cdc_id, cdc_id]
+            );
+          } else if (userCheck[0].type === 'president' && type !== 'president') {
+            // Remove CDC association if changing from president to another type
+            await connection.query(
+              'DELETE FROM cdc_presidents WHERE user_id = ?',
+              [userId]
+            );
+          }
+        }
+
+        await connection.commit();
+      } catch (err) {
+        await connection.rollback();
+        throw err;
+      }
+    });
+
+    res.json({ 
+      success: true,
+      message: 'User updated successfully'
+    });
+  } catch (err) {
+    const status = err.message === 'User not found' || err.message === 'CDC not found' ? 404 : 400;
+    res.status(status).json({ 
+      success: false, 
+      message: err.message,
       error: process.env.NODE_ENV === 'development' ? err.message : undefined
     });
   }
