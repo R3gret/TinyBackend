@@ -191,28 +191,28 @@ router.put('/users/cdc/:id', [
           throw new Error('Failed to update user');
         }
 
-        // Handle CDC association (whether updating or removing)
+        // Handle CDC association
         if (type === 'president') {
-          if (cdc_id) {
-            // Verify CDC exists
-            const [cdcCheck] = await connection.query(
-              'SELECT cdc_id FROM cdc WHERE cdc_id = ?',
-              [cdc_id]
-            );
-            
-            if (cdcCheck.length === 0) {
-              throw new Error('CDC not found');
-            }
-
-            // Update or create association
-            await connection.query(
-              'UPDATE users SET cdc_id = ? WHERE id = ?',
-              [cdc_id, userId]
-            );
-          } else {
+          if (!cdc_id) {
             throw new Error('CDC ID is required for president');
           }
-        } else if (userCheck[0].type === 'president' && type !== 'president') {
+          
+          // Verify CDC exists
+          const [cdcCheck] = await connection.query(
+            'SELECT cdc_id FROM cdc WHERE cdc_id = ?',
+            [cdc_id]
+          );
+          
+          if (cdcCheck.length === 0) {
+            throw new Error('CDC not found');
+          }
+
+          // Update CDC association
+          await connection.query(
+            'UPDATE users SET cdc_id = ? WHERE id = ?',
+            [cdc_id, userId]
+          );
+        } else {
           // Remove CDC association if changing from president to another type
           await connection.query(
             'UPDATE users SET cdc_id = NULL WHERE id = ?',
