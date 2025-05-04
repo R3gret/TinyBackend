@@ -1,51 +1,76 @@
 const express = require('express');
 const router = express.Router();
 const db = require('../db');
+const jwt = require('jsonwebtoken');
 
+// Middleware to get CDC ID from JWT
+const getPresidentCdcId = async (req) => {
+  const token = req.headers.authorization?.split(' ')[1];
+  if (!token) throw new Error('Unauthorized');
+
+  const decoded = jwt.verify(token, process.env.JWT_SECRET);
+  const loggedInUserId = decoded.id;
+
+  const connection = await db.promisePool.getConnection();
+  try {
+    const [currentUser] = await connection.query(
+      'SELECT cdc_id FROM users WHERE id = ? AND type = "president"', 
+      [loggedInUserId]
+    );
+    if (!currentUser.length) throw new Error('President not found');
+    return currentUser[0].cdc_id;
+  } finally {
+    connection.release();
+  }
+};
+
+// Base student query with CDC filtering
 router.get('/', async (req, res) => {
   const { ageFilter } = req.query;
-  
-  let query = 'SELECT student_id, first_name, middle_name, last_name, birthdate, gender FROM students';
-  const params = [];
-  
-  if (ageFilter) {
-    // Calculate date ranges based on age filter using native Date
-    const today = new Date();
-    let minDate, maxDate;
-    
-    switch(ageFilter) {
-      case '3-4':
-        // For 3.0-4.0 years (36-48 months)
-        maxDate = new Date(today.getFullYear() - 3, today.getMonth(), today.getDate());
-        minDate = new Date(today.getFullYear() - 4, today.getMonth(), today.getDate());
-        break;
-      case '4-5':
-        // For 4.1-5.0 years (49-60 months)
-        maxDate = new Date(today.getFullYear() - 4, today.getMonth(), today.getDate());
-        minDate = new Date(today.getFullYear() - 5, today.getMonth(), today.getDate());
-        break;
-      case '5-6':
-        // For 5.1-5.11 years (61-71 months)
-        maxDate = new Date(today.getFullYear() - 5, today.getMonth(), today.getDate());
-        minDate = new Date(today.getFullYear() - 6, today.getMonth(), today.getDate());
-        break;
-      default:
-        return res.status(400).json({ 
-          success: false, 
-          message: 'Invalid age filter' 
-        });
-    }
-    
-    query += ' WHERE birthdate BETWEEN ? AND ?';
-    params.push(minDate.toISOString().split('T')[0], maxDate.toISOString().split('T')[0]);
-  }
-
   let connection;
+  
   try {
+    const cdcId = await getPresidentCdcId(req);
     connection = await db.promisePool.getConnection();
+
+    let query = `
+      SELECT s.student_id, s.first_name, s.middle_name, s.last_name, s.birthdate, s.gender 
+      FROM students s
+      JOIN student_cdc sc ON s.student_id = sc.student_id
+      WHERE sc.cdc_id = ?
+    `;
+    const params = [cdcId];
+    
+    if (ageFilter) {
+      const today = new Date();
+      let minDate, maxDate;
+      
+      switch(ageFilter) {
+        case '3-4':
+          maxDate = new Date(today.getFullYear() - 3, today.getMonth(), today.getDate());
+          minDate = new Date(today.getFullYear() - 4, today.getMonth(), today.getDate());
+          break;
+        case '4-5':
+          maxDate = new Date(today.getFullYear() - 4, today.getMonth(), today.getDate());
+          minDate = new Date(today.getFullYear() - 5, today.getMonth(), today.getDate());
+          break;
+        case '5-6':
+          maxDate = new Date(today.getFullYear() - 5, today.getMonth(), today.getDate());
+          minDate = new Date(today.getFullYear() - 6, today.getMonth(), today.getDate());
+          break;
+        default:
+          return res.status(400).json({ 
+            success: false, 
+            message: 'Invalid age filter' 
+          });
+      }
+      
+      query += ' AND s.birthdate BETWEEN ? AND ?';
+      params.push(minDate.toISOString().split('T')[0], maxDate.toISOString().split('T')[0]);
+    }
+
     const [results] = await connection.query(query, params);
 
-    // Calculate ages using the same method as frontend
     const studentsWithAge = results.map(student => {
       const birthDate = new Date(student.birthdate);
       const today = new Date();
@@ -53,7 +78,6 @@ router.get('/', async (req, res) => {
       let years = today.getFullYear() - birthDate.getFullYear();
       let months = today.getMonth() - birthDate.getMonth();
       
-      // Adjust for month and day differences
       if (months < 0 || (months === 0 && today.getDate() < birthDate.getDate())) {
         years--;
         months += 12;
@@ -61,17 +85,14 @@ router.get('/', async (req, res) => {
       
       if (today.getDate() < birthDate.getDate()) {
         months--;
-        if (months < 0) {
-          months += 12;
-        }
+        if (months < 0) months += 12;
       }
       
-      // Convert to decimal age (e.g., 3.5 for 3 years 6 months)
       const ageDecimal = years + (months / 12);
       
       return {
         ...student,
-        age: ageDecimal.toFixed(1) // Format to 1 decimal place
+        age: ageDecimal.toFixed(1)
       };
     });
 
@@ -80,7 +101,10 @@ router.get('/', async (req, res) => {
       students: studentsWithAge
     });
   } catch (err) {
-    console.error('Database query error:', err);
+    console.error('Error:', err);
+    if (err.message === 'Unauthorized') {
+      return res.status(401).json({ success: false, message: 'Unauthorized' });
+    }
     return res.status(500).json({ 
       success: false, 
       message: 'Database error' 
@@ -90,50 +114,54 @@ router.get('/', async (req, res) => {
   }
 });
 
-// New route to get gender distribution
+// Gender distribution with CDC filtering
 router.get('/gender-distribution', async (req, res) => {
   const { ageFilter } = req.query;
+  let connection;
   
-  let query = 'SELECT gender, COUNT(*) as count FROM students';
-  const params = [];
-  
-  if (ageFilter) {
-    // Calculate date ranges based on age filter using native Date
-    const today = new Date();
-    let minDate, maxDate;
+  try {
+    const cdcId = await getPresidentCdcId(req);
+    connection = await db.promisePool.getConnection();
+
+    let query = `
+      SELECT s.gender, COUNT(*) as count 
+      FROM students s
+      JOIN student_cdc sc ON s.student_id = sc.student_id
+      WHERE sc.cdc_id = ?
+    `;
+    const params = [cdcId];
     
-    switch(ageFilter) {
-      case '3-4':
-        maxDate = new Date(today.getFullYear() - 3, today.getMonth(), today.getDate());
-        minDate = new Date(today.getFullYear() - 4, today.getMonth(), today.getDate());
-        break;
-      case '4-5':
-        maxDate = new Date(today.getFullYear() - 4, today.getMonth(), today.getDate());
-        minDate = new Date(today.getFullYear() - 5, today.getMonth(), today.getDate());
-        break;
-      case '5-6':
-        maxDate = new Date(today.getFullYear() - 5, today.getMonth(), today.getDate());
-        minDate = new Date(today.getFullYear() - 6, today.getMonth(), today.getDate());
-        break;
-      default:
-        return res.status(400).json({ 
-          success: false, 
-          message: 'Invalid age filter' 
-        });
+    if (ageFilter) {
+      const today = new Date();
+      let minDate, maxDate;
+      
+      switch(ageFilter) {
+        case '3-4':
+          maxDate = new Date(today.getFullYear() - 3, today.getMonth(), today.getDate());
+          minDate = new Date(today.getFullYear() - 4, today.getMonth(), today.getDate());
+          break;
+        case '4-5':
+          maxDate = new Date(today.getFullYear() - 4, today.getMonth(), today.getDate());
+          minDate = new Date(today.getFullYear() - 5, today.getMonth(), today.getDate());
+          break;
+        case '5-6':
+          maxDate = new Date(today.getFullYear() - 5, today.getMonth(), today.getDate());
+          minDate = new Date(today.getFullYear() - 6, today.getMonth(), today.getDate());
+          break;
+        default:
+          return res.status(400).json({ 
+            success: false, 
+            message: 'Invalid age filter' 
+          });
+      }
+      
+      query += ' AND s.birthdate BETWEEN ? AND ?';
+      params.push(minDate.toISOString().split('T')[0], maxDate.toISOString().split('T')[0]);
     }
     
-    query += ' WHERE birthdate BETWEEN ? AND ?';
-    params.push(minDate.toISOString().split('T')[0], maxDate.toISOString().split('T')[0]);
-  }
-  
-  query += ' GROUP BY gender';
+    query += ' GROUP BY s.gender';
 
-  let connection;
-  try {
-    connection = await db.promisePool.getConnection();
     const [results] = await connection.query(query, params);
-
-    // Transform results into a more usable format
     const distribution = {};
     results.forEach(row => {
       distribution[row.gender] = row.count;
@@ -144,7 +172,10 @@ router.get('/gender-distribution', async (req, res) => {
       distribution
     });
   } catch (err) {
-    console.error('Database query error:', err);
+    console.error('Error:', err);
+    if (err.message === 'Unauthorized') {
+      return res.status(401).json({ success: false, message: 'Unauthorized' });
+    }
     return res.status(500).json({ 
       success: false, 
       message: 'Database error' 
@@ -154,18 +185,16 @@ router.get('/gender-distribution', async (req, res) => {
   }
 });
 
-
-// Add this new route to your students router
+// Enrollment stats with CDC filtering
 router.get('/enrollment-stats', async (req, res) => {
   let connection;
   try {
+    const cdcId = await getPresidentCdcId(req);
     connection = await db.promisePool.getConnection();
     
-    // Get current month stats
     const currentMonth = new Date().getMonth() + 1;
     const currentYear = new Date().getFullYear();
     
-    // Get last month stats (handle year transition)
     let lastMonth = currentMonth - 1;
     let lastYear = currentYear;
     if (lastMonth === 0) {
@@ -173,39 +202,50 @@ router.get('/enrollment-stats', async (req, res) => {
       lastYear = currentYear - 1;
     }
     
-    // Query for current month enrollments
+    // All queries now include CDC filtering
     const [currentMonthResults] = await connection.query(
       `SELECT COUNT(*) as count 
-       FROM students 
-       WHERE MONTH(enrolled_at) = ? AND YEAR(enrolled_at) = ?`,
-      [currentMonth, currentYear]
+       FROM students s
+       JOIN student_cdc sc ON s.student_id = sc.student_id
+       WHERE MONTH(s.enrolled_at) = ? 
+       AND YEAR(s.enrolled_at) = ?
+       AND sc.cdc_id = ?`,
+      [currentMonth, currentYear, cdcId]
     );
     
-    // Query for last month enrollments
     const [lastMonthResults] = await connection.query(
       `SELECT COUNT(*) as count 
-       FROM students 
-       WHERE MONTH(enrolled_at) = ? AND YEAR(enrolled_at) = ?`,
-      [lastMonth, lastYear]
+       FROM students s
+       JOIN student_cdc sc ON s.student_id = sc.student_id
+       WHERE MONTH(s.enrolled_at) = ? 
+       AND YEAR(s.enrolled_at) = ?
+       AND sc.cdc_id = ?`,
+      [lastMonth, lastYear, cdcId]
     );
     
-    // Query for total students (all months)
     const [totalResults] = await connection.query(
-      `SELECT COUNT(*) as total FROM students`
+      `SELECT COUNT(*) as total 
+       FROM students s
+       JOIN student_cdc sc ON s.student_id = sc.student_id
+       WHERE sc.cdc_id = ?`,
+      [cdcId]
     );
     
     return res.json({
       success: true,
       stats: {
-        total: totalResults[0].total, // All students
-        currentMonthEnrollments: currentMonthResults[0].count, // Just this month's new students
-        lastMonthEnrollments: lastMonthResults[0].count, // Just last month's new students
-        difference: currentMonthResults[0].count - lastMonthResults[0].count // Comparison
+        total: totalResults[0].total,
+        currentMonthEnrollments: currentMonthResults[0].count,
+        lastMonthEnrollments: lastMonthResults[0].count,
+        difference: currentMonthResults[0].count - lastMonthResults[0].count
       }
     });
     
   } catch (err) {
-    console.error('Database query error:', err);
+    console.error('Error:', err);
+    if (err.message === 'Unauthorized') {
+      return res.status(401).json({ success: false, message: 'Unauthorized' });
+    }
     return res.status(500).json({ 
       success: false, 
       message: 'Database error' 
@@ -215,19 +255,18 @@ router.get('/enrollment-stats', async (req, res) => {
   }
 });
 
-// New route to get age group distribution
+// Age distribution with CDC filtering
 router.get('/age-distribution', async (req, res) => {
   let connection;
   try {
+    const cdcId = await getPresidentCdcId(req);
     connection = await db.promisePool.getConnection();
     
-    // Get current date for age calculations
     const today = new Date();
     const currentYear = today.getFullYear();
     const currentMonth = today.getMonth();
     const currentDay = today.getDate();
     
-    // Calculate date ranges for each age group
     const ageGroups = {
       '3-4': {
         minDate: new Date(currentYear - 4, currentMonth, currentDay),
@@ -243,15 +282,16 @@ router.get('/age-distribution', async (req, res) => {
       }
     };
     
-    // Query to count students in each age group
     const distribution = {};
     
     for (const [group, dates] of Object.entries(ageGroups)) {
       const [results] = await connection.query(
         `SELECT COUNT(*) as count 
-         FROM students 
-         WHERE birthdate BETWEEN ? AND ?`,
-        [dates.minDate.toISOString().split('T')[0], dates.maxDate.toISOString().split('T')[0]]
+         FROM students s
+         JOIN student_cdc sc ON s.student_id = sc.student_id
+         WHERE s.birthdate BETWEEN ? AND ?
+         AND sc.cdc_id = ?`,
+        [dates.minDate.toISOString().split('T')[0], dates.maxDate.toISOString().split('T')[0], cdcId]
       );
       
       distribution[group] = results[0].count;
@@ -263,7 +303,10 @@ router.get('/age-distribution', async (req, res) => {
     });
     
   } catch (err) {
-    console.error('Database query error:', err);
+    console.error('Error:', err);
+    if (err.message === 'Unauthorized') {
+      return res.status(401).json({ success: false, message: 'Unauthorized' });
+    }
     return res.status(500).json({ 
       success: false, 
       message: 'Database error' 
