@@ -123,10 +123,10 @@ router.get('/admins/search', async (req, res) => {
   }
 });
 
-router.put('/users/:id', [
+router.put('/users/cdc/:id', [
   body('username').trim().isLength({ min: 3 }).optional(),
   body('type').isIn(['admin', 'worker', 'parent', 'president']).optional(),
-  body('cdc_name').optional().trim()
+  body('cdc_id').isInt().optional()
 ], async (req, res) => {
   const errors = validationResult(req);
   if (!errors.isEmpty()) {
@@ -138,71 +138,105 @@ router.put('/users/:id', [
   }
 
   try {
-    const { username, type, password, cdc_name } = req.body;
+    const { username, type, password, cdc_id } = req.body;
     const userId = req.params.id;
     
     await withConnection(async (connection) => {
       await connection.beginTransaction();
 
-      // Get current user data
-      const [userCheck] = await connection.query(
-        'SELECT * FROM users WHERE id = ?', 
-        [userId]
-      );
-      
-      if (userCheck.length === 0) {
-        throw new Error('User not found');
-      }
-
-      const currentUser = userCheck[0];
-      let cdcId = null;
-
-      // Handle CDC assignment for president
-      if (type === 'president' || (type === undefined && currentUser.type === 'president')) {
-        if (cdc_name) {
-          // Look up CDC by name
-          const [cdcResults] = await connection.query(
-            'SELECT cdc_id FROM cdc WHERE name = ? LIMIT 1',
-            [cdc_name]
-          );
-          
-          if (cdcResults.length === 0) {
-            throw new Error('CDC not found with that name');
-          }
-          
-          cdcId = cdcResults[0].cdc_id;
-        } else if (currentUser.type === 'president') {
-          // Keep existing CDC if not changing
-          cdcId = currentUser.cdc_id;
-        } else {
-          throw new Error('CDC name is required for president');
+      try {
+        // Check if user exists
+        const [userCheck] = await connection.query(
+          'SELECT * FROM users WHERE id = ?', 
+          [userId]
+        );
+        
+        if (userCheck.length === 0) {
+          throw new Error('User not found');
         }
+
+        // Check for duplicate username if changed
+        if (username && username !== userCheck[0].username) {
+          const [existingUsers] = await connection.query(
+            'SELECT id FROM users WHERE username = ? AND id != ?', 
+            [username, userId]
+          );
+
+          if (existingUsers.length > 0) {
+            throw new Error('Username already in use');
+          }
+        }
+
+        // Handle password update if provided
+        let hashedPassword = userCheck[0].password;
+        if (password) {
+          if (password.length < 8) {
+            throw new Error('Password must be at least 8 characters');
+          }
+          hashedPassword = await bcrypt.hash(password, 10);
+        }
+
+        // Update user
+        const [results] = await connection.query(
+          'UPDATE users SET username = ?, type = ?, password = ? WHERE id = ?',
+          [
+            username || userCheck[0].username,
+            type || userCheck[0].type,
+            hashedPassword,
+            userId
+          ]
+        );
+
+        if (results.affectedRows === 0) {
+          throw new Error('Failed to update user');
+        }
+
+        // Handle CDC association (whether updating or removing)
+        if (type === 'president') {
+          if (cdc_id) {
+            // Verify CDC exists
+            const [cdcCheck] = await connection.query(
+              'SELECT cdc_id FROM cdc WHERE cdc_id = ?',
+              [cdc_id]
+            );
+            
+            if (cdcCheck.length === 0) {
+              throw new Error('CDC not found');
+            }
+
+            // Update or create association
+            await connection.query(
+              'UPDATE users SET cdc_id = ? WHERE id = ?',
+              [cdc_id, userId]
+            );
+          } else {
+            throw new Error('CDC ID is required for president');
+          }
+        } else if (userCheck[0].type === 'president' && type !== 'president') {
+          // Remove CDC association if changing from president to another type
+          await connection.query(
+            'UPDATE users SET cdc_id = NULL WHERE id = ?',
+            [userId]
+          );
+        }
+
+        await connection.commit();
+      } catch (err) {
+        await connection.rollback();
+        throw err;
       }
+    });
 
-      // Update user
-      const [results] = await connection.query(
-        'UPDATE users SET username = ?, type = ?, password = ?, cdc_id = ? WHERE id = ?',
-        [
-          username || currentUser.username,
-          type || currentUser.type,
-          password ? await bcrypt.hash(password, 10) : currentUser.password,
-          cdcId,
-          userId
-        ]
-      );
-
-      await connection.commit();
-      
-      res.json({ 
-        success: true,
-        message: 'User updated successfully'
-      });
+    res.json({ 
+      success: true,
+      message: 'User updated successfully'
     });
   } catch (err) {
-    const status = err.message.includes('not found') ? 404 : 400;
+    const status = err.message === 'User not found' || err.message === 'CDC not found' ? 404 : 400;
     res.status(status).json({ 
       success: false, 
-      message: err.message
+      message: err.message,
+      error: process.env.NODE_ENV === 'development' ? err.message : undefined
     });
   }
 });
