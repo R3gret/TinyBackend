@@ -242,7 +242,7 @@ router.put('/users/cdc/:id', [
 });
 
 // Get all admin users with filtering
-router.get('/', async (req, res) => {
+router.get('/preslist', async (req, res) => {
   try {
     const { search } = req.query;
     
