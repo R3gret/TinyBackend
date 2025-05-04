@@ -50,6 +50,7 @@ app.use('/api/domains', require('./routes/domains'));
 app.use('/api/files', require('./routes/fileRoutes'));
 app.use('/api/announcements', require('./routes/announcement'));
 app.use('/api/cdc', require('./routes/insert_cdc'));
+app.use('/api/pres', require('./routes/PresidentAdminList'));
 
 // Static files
 app.use('/uploads/announcements', express.static(path.join(__dirname, 'uploads/announcements')));
