@@ -126,7 +126,7 @@ router.get('/admins/search', async (req, res) => {
 router.put('/users/:id', [
   body('username').trim().isLength({ min: 3 }).optional(),
   body('type').isIn(['admin', 'worker', 'parent', 'president']).optional(),
-  body('cdc_id').isInt().optional()
+  body('cdc_name').optional().trim()
 ], async (req, res) => {
   const errors = validationResult(req);
   if (!errors.isEmpty()) {
@@ -138,7 +138,7 @@ router.put('/users/:id', [
   }
 
   try {
-    const { username, type, password, cdc_id } = req.body;
+    const { username, type, password, cdc_name } = req.body;
     const userId = req.params.id;
     
     await withConnection(async (connection) => {
@@ -155,37 +155,38 @@ router.put('/users/:id', [
       }
 
       const currentUser = userCheck[0];
+      let cdcId = null;
 
-      // Handle CDC validation for president
+      // Handle CDC assignment for president
       if (type === 'president' || (type === undefined && currentUser.type === 'president')) {
-        // Use new cdc_id if provided, otherwise keep existing if not changing type
-        const effectiveCdcId = type === 'president' 
-          ? (cdc_id || currentUser.cdc_id)
-          : cdc_id;
-
-        if (!effectiveCdcId) {
-          throw new Error('CDC ID is required for president');
-        }
-
-        // Verify CDC exists
-        const [cdcCheck] = await connection.query(
-          'SELECT 1 FROM cdc WHERE cdc_id = ? LIMIT 1',
-          [effectiveCdcId]
-        );
-        
-        if (cdcCheck.length === 0) {
-          throw new Error('CDC not found');
+        if (cdc_name) {
+          // Look up CDC by name
+          const [cdcResults] = await connection.query(
+            'SELECT cdc_id FROM cdc WHERE name = ? LIMIT 1',
+            [cdc_name]
+          );
+          
+          if (cdcResults.length === 0) {
+            throw new Error('CDC not found with that name');
+          }
+          
+          cdcId = cdcResults[0].cdc_id;
+        } else if (currentUser.type === 'president') {
+          // Keep existing CDC if not changing
+          cdcId = currentUser.cdc_id;
+        } else {
+          throw new Error('CDC name is required for president');
         }
       }
 
-      // Rest of your update logic...
+      // Update user
       const [results] = await connection.query(
         'UPDATE users SET username = ?, type = ?, password = ?, cdc_id = ? WHERE id = ?',
         [
           username || currentUser.username,
           type || currentUser.type,
           password ? await bcrypt.hash(password, 10) : currentUser.password,
-          type === 'president' ? (cdc_id || currentUser.cdc_id) : null,
+          cdcId,
           userId
         ]
       );
