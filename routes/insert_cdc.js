@@ -42,6 +42,73 @@
     return missingFields;
   };
 
+
+   // Get all admin users
+router.get('/admins', async (req, res) => {
+  let connection;
+  try {
+    connection = await db.promisePool.getConnection();
+    const [results] = await connection.query(
+      'SELECT id, username, type, cdc_id FROM users WHERE type = "admin"'
+    );
+    res.json({ 
+      success: true,
+      data: results 
+    });
+  } catch (err) {
+    console.error('Database error:', {
+      error: err.message,
+      sql: err.sql,
+      stack: process.env.NODE_ENV === 'development' ? err.stack : undefined
+    });
+    res.status(500).json({ 
+      success: false,
+      message: 'Failed to fetch admin users',
+      error: process.env.NODE_ENV === 'development' ? err.message : undefined
+    });
+  } finally {
+    if (connection) await connection.release();
+  }
+});
+
+// Search admin users
+router.get('/admins/search', async (req, res) => {
+  const { query } = req.query;
+  let connection;
+  try {
+    if (!query || query.trim() === '') {
+      return res.status(400).json({
+        success: false,
+        message: 'Search query is required'
+      });
+    }
+
+    connection = await db.promisePool.getConnection();
+    const [results] = await connection.query(
+      'SELECT id, username, type, cdc_id FROM users WHERE type = "admin" AND username LIKE ?',
+      [`%${query}%`]
+    );
+    
+    res.json({ 
+      success: true,
+      data: results 
+    });
+  } catch (err) {
+    console.error('Database error:', {
+      error: err.message,
+      sql: err.sql,
+      stack: process.env.NODE_ENV === 'development' ? err.stack : undefined
+    });
+    res.status(500).json({ 
+      success: false,
+      message: 'Failed to search admin users',
+      error: process.env.NODE_ENV === 'development' ? err.message : undefined
+    });
+  } finally {
+    if (connection) await connection.release();
+  }
+});
+
   // Create CDC endpoint
   router.post('/', async (req, res) => {
     const missingFields = validateCDCData(req.body);
@@ -734,43 +801,5 @@
     }
   });
 
-  // Get all admin users
-router.get('/admins', async (req, res) => {
-  try {
-    const [results] = await db.promisePool.query(
-      `SELECT id, username, type, cdc_id 
-       FROM users 
-       WHERE type = 'admin'`
-    );
-    
-    res.json({ success: true, data: results });
-  } catch (err) {
-    res.status(500).json({ 
-      success: false, 
-      message: 'Failed to fetch admin users' 
-    });
-  }
-});
-
-// Search admin users
-router.get('/admins/search', async (req, res) => {
-  const { query } = req.query;
-
-  try {
-    const [results] = await db.promisePool.query(
-      `SELECT id, username, type, cdc_id 
-       FROM users 
-       WHERE type = 'admin' AND username LIKE ?`,
-      [`%${query}%`]
-    );
-    
-    res.json({ success: true, data: results });
-  } catch (err) {
-    res.status(500).json({ 
-      success: false, 
-      message: 'Failed to search admin users' 
-    });
-  }
-});
 
   module.exports = router;
