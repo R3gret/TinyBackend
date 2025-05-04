@@ -15,7 +15,7 @@ const getPresidentCdcId = async (req) => {
   try {
     const [currentUser] = await connection.query(
       'SELECT cdc_id FROM users WHERE id = ? AND type = ?', 
-      [loggedInUserId, 'president']  // Using parameterized query
+      [loggedInUserId, 'president']
     );
     if (!currentUser.length) throw new Error('President not found');
     return currentUser[0].cdc_id;
@@ -34,10 +34,9 @@ router.get('/', async (req, res) => {
     connection = await db.promisePool.getConnection();
 
     let query = `
-      SELECT s.student_id, s.first_name, s.middle_name, s.last_name, s.birthdate, s.gender 
-      FROM students s
-      JOIN student_cdc sc ON s.student_id = sc.student_id
-      WHERE sc.cdc_id = ?
+      SELECT student_id, first_name, middle_name, last_name, birthdate, gender 
+      FROM students
+      WHERE cdc_id = ?
     `;
     const params = [cdcId];
     
@@ -65,7 +64,7 @@ router.get('/', async (req, res) => {
           });
       }
       
-      query += ' AND s.birthdate BETWEEN ? AND ?';
+      query += ' AND birthdate BETWEEN ? AND ?';
       params.push(minDate.toISOString().split('T')[0], maxDate.toISOString().split('T')[0]);
     }
 
@@ -124,10 +123,9 @@ router.get('/gender-distribution', async (req, res) => {
     connection = await db.promisePool.getConnection();
 
     let query = `
-      SELECT s.gender, COUNT(*) as count 
-      FROM students s
-      JOIN student_cdc sc ON s.student_id = sc.student_id
-      WHERE sc.cdc_id = ?
+      SELECT gender, COUNT(*) as count 
+      FROM students
+      WHERE cdc_id = ?
     `;
     const params = [cdcId];
     
@@ -155,11 +153,11 @@ router.get('/gender-distribution', async (req, res) => {
           });
       }
       
-      query += ' AND s.birthdate BETWEEN ? AND ?';
+      query += ' AND birthdate BETWEEN ? AND ?';
       params.push(minDate.toISOString().split('T')[0], maxDate.toISOString().split('T')[0]);
     }
     
-    query += ' GROUP BY s.gender';
+    query += ' GROUP BY gender';
 
     const [results] = await connection.query(query, params);
     const distribution = {};
@@ -202,32 +200,28 @@ router.get('/enrollment-stats', async (req, res) => {
       lastYear = currentYear - 1;
     }
     
-    // All queries now include CDC filtering
     const [currentMonthResults] = await connection.query(
       `SELECT COUNT(*) as count 
-       FROM students s
-       JOIN student_cdc sc ON s.student_id = sc.student_id
-       WHERE MONTH(s.enrolled_at) = ? 
-       AND YEAR(s.enrolled_at) = ?
-       AND sc.cdc_id = ?`,
+       FROM students
+       WHERE MONTH(enrolled_at) = ? 
+       AND YEAR(enrolled_at) = ?
+       AND cdc_id = ?`,
       [currentMonth, currentYear, cdcId]
     );
     
     const [lastMonthResults] = await connection.query(
       `SELECT COUNT(*) as count 
-       FROM students s
-       JOIN student_cdc sc ON s.student_id = sc.student_id
-       WHERE MONTH(s.enrolled_at) = ? 
-       AND YEAR(s.enrolled_at) = ?
-       AND sc.cdc_id = ?`,
+       FROM students
+       WHERE MONTH(enrolled_at) = ? 
+       AND YEAR(enrolled_at) = ?
+       AND cdc_id = ?`,
       [lastMonth, lastYear, cdcId]
     );
     
     const [totalResults] = await connection.query(
       `SELECT COUNT(*) as total 
-       FROM students s
-       JOIN student_cdc sc ON s.student_id = sc.student_id
-       WHERE sc.cdc_id = ?`,
+       FROM students
+       WHERE cdc_id = ?`,
       [cdcId]
     );
     
@@ -287,10 +281,9 @@ router.get('/age-distribution', async (req, res) => {
     for (const [group, dates] of Object.entries(ageGroups)) {
       const [results] = await connection.query(
         `SELECT COUNT(*) as count 
-         FROM students s
-         JOIN student_cdc sc ON s.student_id = sc.student_id
-         WHERE s.birthdate BETWEEN ? AND ?
-         AND sc.cdc_id = ?`,
+         FROM students
+         WHERE birthdate BETWEEN ? AND ?
+         AND cdc_id = ?`,
         [dates.minDate.toISOString().split('T')[0], dates.maxDate.toISOString().split('T')[0], cdcId]
       );
       
