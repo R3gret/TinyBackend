@@ -89,6 +89,96 @@ router.get('/age-groups', verifyToken, async (req, res) => {
   }
 });
 
+// Add this to your parentannouncements.js file
+
+// GET /api/parentannouncements/filtered-classworks - Returns classworks filtered by student's age and CDC
+router.get('/filtered-classworks', async (req, res) => {
+  let connection;
+  
+  try {
+    // Get student info (reusing the same middleware as announcements)
+    const { student_id, age, cdc_id } = await getStudentInfo(req);
+    connection = await db.promisePool.getConnection();
+
+    // Determine age group (same logic as announcements)
+    let ageGroup;
+    if (age >= 3 && age < 4) {
+      ageGroup = '3-4';
+    } else if (age >= 4 && age < 5) {
+      ageGroup = '4-5';
+    } else if (age >= 5 && age <= 6) {
+      ageGroup = '5-6';
+    } else {
+      ageGroup = 'other';
+    }
+
+    // Query classworks that match:
+    // 1. The student's age group OR 'all' age filter
+    // AND
+    // 2. Either:
+    //    - No specific CDC (cdc_id IS NULL) - applies to all CDCs
+    //    - OR matches the student's CDC (cdc_id = student's cdc_id)
+    const [classworks] = await connection.query(
+      `SELECT 
+        c.*, 
+        cat.category_name,
+        ag.age_range,
+        u.name as author_name
+       FROM classworks c
+       JOIN domain_file_categories cat ON c.category_id = cat.category_id
+       JOIN age_groups ag ON c.age_group_id = ag.age_group_id
+       LEFT JOIN users u ON c.author_id = u.id
+       WHERE (ag.age_range = ? OR ag.age_range = 'all')
+       AND (c.cdc_id IS NULL OR c.cdc_id = ?)
+       ORDER BY c.created_at DESC`,
+      [ageGroup, cdc_id]
+    );
+
+    // Format the results
+    const formattedClassworks = classworks.map(cw => ({
+      ...cw,
+      age_range: cw.age_range.replace(/\?/g, '-')
+    }));
+
+    return res.json({
+      success: true,
+      student_id,
+      age,
+      ageGroup,
+      cdc_id,
+      classworks: formattedClassworks
+    });
+  } catch (err) {
+    console.error('Error fetching filtered classworks:', {
+      message: err.message,
+      stack: err.stack,
+      sql: err.sql,
+      code: err.code
+    });
+    
+    if (err.message === 'Unauthorized') {
+      return res.status(401).json({ success: false, message: 'Unauthorized' });
+    }
+    if (err.message === 'Parent not found') {
+      return res.status(403).json({ success: false, message: 'Access denied' });
+    }
+    if (err.message === 'Student not found for this parent') {
+      return res.status(404).json({ success: false, message: 'No associated student found' });
+    }
+    
+    return res.status(500).json({ 
+      success: false, 
+      message: 'Database error',
+      errorDetails: process.env.NODE_ENV === 'development' ? {
+        message: err.message,
+        code: err.code
+      } : undefined
+    });
+  } finally {
+    if (connection) connection.release();
+  }
+});
+
 // GET /api/files - Takes category_id and age_group_id as query params
 router.get('/', verifyToken, async (req, res) => {
   const { category_id, age_group_id } = req.query;
