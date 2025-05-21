@@ -84,7 +84,7 @@ router.get('/', async (req, res) => {
 
 // Create parent account (locked to parent type with creator's CDC ID)
 router.post('/', async (req, res) => {
-  const { username, password } = req.body;
+  const { username, password, guardianId } = req.body; // Add guardianId to destructuring
   let connection;
 
   // Validation
@@ -106,49 +106,69 @@ router.post('/', async (req, res) => {
 
     connection = await db.promisePool.getConnection();
     
-    // Get creator's CDC ID
-    const [creator] = await connection.query(
-      'SELECT cdc_id FROM users WHERE id = ?', 
-      [loggedInUserId]
-    );
+    // Start transaction
+    await connection.beginTransaction();
     
-    if (!creator.length) {
-      return res.status(404).json({ error: 'User not found' });
+    try {
+      // Get creator's CDC ID
+      const [creator] = await connection.query(
+        'SELECT cdc_id FROM users WHERE id = ?', 
+        [loggedInUserId]
+      );
+      
+      if (!creator.length) {
+        throw new Error('User not found');
+      }
+      
+      const cdcId = creator[0].cdc_id;
+
+      // Check if username exists
+      const [existingUsers] = await connection.query(
+        'SELECT id FROM users WHERE username = ?', 
+        [username]
+      );
+
+      if (existingUsers.length > 0) {
+        throw new Error('Username already exists');
+      }
+
+      // Hash the password
+      const hashedPassword = await bcrypt.hash(password, 10);
+
+      // Insert new parent account with creator's CDC ID
+      const [result] = await connection.query(
+        'INSERT INTO users (username, password, type, cdc_id) VALUES (?, ?, ?, ?)',
+        [username, hashedPassword, 'parent', cdcId]
+      );
+
+      const newUserId = result.insertId;
+
+      // If guardianId was provided, update the guardian_info record
+      if (guardianId) {
+        await connection.query(
+          'UPDATE guardian_info SET id = ? WHERE guardian_id = ?',
+          [newUserId, guardianId]
+        );
+      }
+
+      await connection.commit();
+
+      res.status(201).json({
+        id: newUserId,
+        username,
+        type: 'parent',
+        cdc_id: cdcId
+      });
+    } catch (err) {
+      await connection.rollback();
+      throw err;
     }
-    
-    const cdcId = creator[0].cdc_id;
-
-    // Check if username exists
-    const [existingUsers] = await connection.query(
-      'SELECT id FROM users WHERE username = ?', 
-      [username]
-    );
-
-    if (existingUsers.length > 0) {
-      return res.status(400).json({ error: 'Username already exists' });
-    }
-
-    // Hash the password
-    const hashedPassword = await bcrypt.hash(password, 10);
-
-    // Insert new parent account with creator's CDC ID
-    const [result] = await connection.query(
-      'INSERT INTO users (username, password, type, cdc_id) VALUES (?, ?, ?, ?)',
-      [username, hashedPassword, 'parent', cdcId]
-    );
-
-    res.status(201).json({
-      id: result.insertId,
-      username,
-      type: 'parent',
-      cdc_id: cdcId
-    });
   } catch (err) {
     console.error('Error creating user:', err);
     if (err.message === 'Unauthorized') {
       return res.status(401).json({ error: 'Unauthorized' });
     }
-    res.status(500).json({ error: 'Failed to create parent account' });
+    res.status(500).json({ error: err.message || 'Failed to create parent account' });
   } finally {
     if (connection) connection.release();
   }
@@ -301,6 +321,51 @@ router.put('/:id', async (req, res) => {
   } catch (err) {
     console.error('Error updating user:', err);
     res.status(500).json({ error: 'Failed to update user' });
+  } finally {
+    if (connection) connection.release();
+  }
+});
+
+
+// Get all guardians for the current CDC
+router.get('/guardians', async (req, res) => {
+  let connection;
+  try {
+    // Get creator's CDC ID from JWT
+    const token = req.headers.authorization?.split(' ')[1];
+    if (!token) throw new Error('Unauthorized');
+
+    const decoded = jwt.verify(token, process.env.JWT_SECRET);
+    const loggedInUserId = decoded.id;
+
+    connection = await db.promisePool.getConnection();
+    
+    // Get creator's CDC ID
+    const [creator] = await connection.query(
+      'SELECT cdc_id FROM users WHERE id = ?', 
+      [loggedInUserId]
+    );
+    
+    if (!creator.length) {
+      return res.status(404).json({ error: 'User not found' });
+    }
+    
+    const cdcId = creator[0].cdc_id;
+
+    // Get all guardians with their associated student info
+    const [results] = await connection.query(`
+      SELECT gi.guardian_id, gi.guardian_name, gi.relationship, gi.email_address, 
+             gi.student_id, gi.id as user_id,
+             s.name as student_name, s.id as student_id
+      FROM guardian_info gi
+      LEFT JOIN students s ON gi.student_id = s.id
+      WHERE s.cdc_id = ? AND gi.id IS NULL
+    `, [cdcId]);
+
+    res.json(results);
+  } catch (err) {
+    console.error('Database error:', err);
+    res.status(500).json({ error: 'Failed to fetch guardians' });
   } finally {
     if (connection) connection.release();
   }
