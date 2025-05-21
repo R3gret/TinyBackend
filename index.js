@@ -57,6 +57,7 @@ app.use('/api/dash', require('./routes/studentsdash'));
 app.use('/api/att', require('./routes/studattendance'));
 app.use('/api/dom', require('./routes/domainstud'));
 app.use('/api/submissions', require('./routes/submissions'));
+app.use('/api/parentannouncements', require('./routes/parentannouncements'));
 // Static files
 app.use('/uploads/announcements', express.static(path.join(__dirname, 'uploads/announcements')));
 
