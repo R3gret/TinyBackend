@@ -4,6 +4,71 @@ const router = express.Router();
 const db = require('../db');
 const jwt = require('jsonwebtoken');
 
+// Get all guardians for the current CDC
+router.get('/guardians', async (req, res) => {
+  let connection;
+  try {
+    // Get creator's CDC ID from JWT
+    const token = req.headers.authorization?.split(' ')[1];
+    if (!token) {
+      console.error('No token provided');
+      return res.status(401).json({ error: 'Unauthorized - No token provided' });
+    }
+
+    let decoded;
+    try {
+      decoded = jwt.verify(token, process.env.JWT_SECRET);
+    } catch (jwtError) {
+      console.error('JWT verification failed:', jwtError);
+      return res.status(401).json({ error: 'Unauthorized - Invalid token' });
+    }
+
+    const loggedInUserId = decoded.id;
+    console.log(`Fetching guardians for user ID: ${loggedInUserId}`);
+
+    connection = await db.promisePool.getConnection();
+    
+    // Get creator's CDC ID
+    const [creator] = await connection.query(
+      'SELECT cdc_id FROM users WHERE id = ?', 
+      [loggedInUserId]
+    );
+    
+    if (!creator.length) {
+      console.error('Creator not found in database');
+      return res.status(404).json({ error: 'User not found' });
+    }
+    
+    const cdcId = creator[0].cdc_id;
+    console.log(`CDC ID: ${cdcId}`);
+
+    // Get all guardians with their associated student info
+    const query = `
+      SELECT gi.guardian_id, gi.guardian_name, gi.relationship, gi.email_address, 
+             gi.student_id, gi.id as user_id,
+             s.name as student_name, s.id as student_id
+      FROM guardian_info gi
+      LEFT JOIN students s ON gi.student_id = s.id
+      WHERE s.cdc_id = ? AND (gi.id IS NULL OR gi.id = '')
+    `;
+    console.log('Executing query:', query);
+
+    const [results] = await connection.query(query, [cdcId]);
+    console.log(`Found ${results.length} guardians`);
+
+    res.json(results);
+  } catch (err) {
+    console.error('Database error:', err);
+    res.status(500).json({ 
+      error: 'Failed to fetch guardians',
+      details: err.message,
+      stack: process.env.NODE_ENV === 'development' ? err.stack : undefined
+    });
+  } finally {
+    if (connection) connection.release();
+  }
+});
+
 // Get all parent accounts
 // Get all parent accounts for the current CDC
 router.get('/', async (req, res) => {
@@ -326,49 +391,5 @@ router.put('/:id', async (req, res) => {
   }
 });
 
-
-// Get all guardians for the current CDC
-router.get('/guardians', async (req, res) => {
-  let connection;
-  try {
-    // Get creator's CDC ID from JWT
-    const token = req.headers.authorization?.split(' ')[1];
-    if (!token) throw new Error('Unauthorized');
-
-    const decoded = jwt.verify(token, process.env.JWT_SECRET);
-    const loggedInUserId = decoded.id;
-
-    connection = await db.promisePool.getConnection();
-    
-    // Get creator's CDC ID
-    const [creator] = await connection.query(
-      'SELECT cdc_id FROM users WHERE id = ?', 
-      [loggedInUserId]
-    );
-    
-    if (!creator.length) {
-      return res.status(404).json({ error: 'User not found' });
-    }
-    
-    const cdcId = creator[0].cdc_id;
-
-    // Get all guardians with their associated student info
-    const [results] = await connection.query(`
-      SELECT gi.guardian_id, gi.guardian_name, gi.relationship, gi.email_address, 
-             gi.student_id, gi.id as user_id,
-             s.name as student_name, s.id as student_id
-      FROM guardian_info gi
-      LEFT JOIN students s ON gi.student_id = s.id
-      WHERE s.cdc_id = ? AND gi.id IS NULL
-    `, [cdcId]);
-
-    res.json(results);
-  } catch (err) {
-    console.error('Database error:', err);
-    res.status(500).json({ error: 'Failed to fetch guardians' });
-  } finally {
-    if (connection) connection.release();
-  }
-});
 
 module.exports = router;
