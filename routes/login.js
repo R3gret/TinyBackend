@@ -85,7 +85,8 @@ router.post('/', loginLimiter, validateLogin, async (req, res) => {
       user: { 
         id: user.id, 
         username: user.username, 
-        type: user.type 
+        type: user.type,
+        cdc_id: user.cdc_id
       }
     });
 
