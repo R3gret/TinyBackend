@@ -18,11 +18,17 @@ router.get('/', async (req, res) => {
   try {
     const loggedInUserId = req.user.id;
     const cdcId = await getLoggedInUserCdcId(loggedInUserId);
+    const { search } = req.query;
 
-    const [workers] = await db.promisePool.query(
-      'SELECT id, username, profile_pic FROM users WHERE type = \'worker\' AND cdc_id = ?',
-      [cdcId]
-    );
+    let query = 'SELECT id, username, profile_pic FROM users WHERE type = \'worker\' AND cdc_id = ?';
+    const params = [cdcId];
+
+    if (search) {
+      query += ' AND username LIKE ?';
+      params.push(`%${search}%`);
+    }
+
+    const [workers] = await db.promisePool.query(query, params);
 
     res.json({ success: true, data: workers });
   } catch (error) {
