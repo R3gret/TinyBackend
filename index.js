@@ -59,6 +59,7 @@ app.use('/api/att', require('./routes/studattendance'));
 app.use('/api/dom', require('./routes/domainstud'));
 app.use('/api/submissions', require('./routes/submissions'));
 app.use('/api/parentannouncements', require('./routes/parentannouncements'));
+app.use('/api/workers', require('./routes/workers')); // Use the new worker routes
 // Static files
 app.use('/uploads/announcements', express.static(path.join(__dirname, 'uploads/announcements')));
 
