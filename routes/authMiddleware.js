@@ -15,7 +15,18 @@ const authenticate = (req, res, next) => {
   
   try {
     const decoded = jwt.verify(token, process.env.JWT_SECRET || 'your-secret-key');
-    req.user = decoded;
+    
+    // Ensure the decoded payload is assigned correctly
+    req.user = decoded.user || decoded; // Handle nested 'user' object or direct payload
+
+    // Verify that req.user.id exists
+    if (!req.user || !req.user.id) {
+      return res.status(401).json({
+        success: false,
+        message: 'Invalid token payload: User ID missing.'
+      });
+    }
+
     next();
   } catch (err) {
     // More specific error messages
