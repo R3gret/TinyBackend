@@ -59,32 +59,23 @@ router.post('/', loginLimiter, validateLogin, async (req, res) => {
       });
     }
 
-    if (!isMatch) {
-      return res.status(401).json({ 
-        success: false, 
-        message: 'Invalid credentials' 
-      });
-    }
-
-    if (!process.env.JWT_SECRET) {
-      throw new Error('JWT_SECRET not configured');
-    }
+    // Create JWT with user object
+    const payload = {
+      user: {
+        id: user.id,
+        username: user.username,
+        type: user.type,
+        cdc_id: user.cdc_id
+      }
+    };
 
     const token = jwt.sign(
-      { id: user.id, username: user.username, type: user.type },
-      process.env.JWT_SECRET,
-      { expiresIn: process.env.JWT_EXPIRES_IN || '1h', algorithm: 'HS256' }
+      payload,
+      process.env.JWT_SECRET || 'your-secret-key',
+      { expiresIn: '1h' }
     );
 
-    res.cookie('token', token, {
-      httpOnly: true,
-      secure: process.env.NODE_ENV === 'production',
-      sameSite: 'strict',
-      maxAge: 3600000
-    });
-
-    // Also return the token in response for localStorage
-    return res.json({
+    res.json({
       success: true,
       token, // Send token in response body
       expiresIn: 3600, // 1 hour in seconds
