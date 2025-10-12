@@ -6,6 +6,9 @@ const bcrypt = require('bcryptjs');
 
 // Middleware to check if the user is associated with a CDC
 const hasCdcAssociation = (req, res, next) => {
+  // TEMPORARY DEBUG LOG: Inspect the user object
+  console.log('Inspecting req.user in hasCdcAssociation:', req.user);
+
   if (!req.user || !req.user.cdc_id) {
     return res.status(403).json({ success: false, message: 'User is not associated with a CDC. Access denied.' });
   }
