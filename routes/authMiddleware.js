@@ -16,10 +16,20 @@ const authenticate = (req, res, next) => {
   try {
     const decoded = jwt.verify(token, process.env.JWT_SECRET || 'your-secret-key');
     
-    // Ensure the decoded payload is assigned correctly
-    req.user = decoded.user || decoded; // Handle nested 'user' object or direct payload
+    // --- START DEBUG LOGGING ---
+    console.log('--- AUTH MIDDLEWARE DEBUG ---');
+    console.log('Decoded token payload:', JSON.stringify(decoded, null, 2));
+    // --- END DEBUG LOGGING ---
 
-    // Verify that req.user.id exists
+    // Explicitly assign the nested user object
+    req.user = decoded.user;
+
+    // --- START DEBUG LOGGING ---
+    console.log('Assigned req.user:', JSON.stringify(req.user, null, 2));
+    console.log('--- END AUTH MIDDLEWARE DEBUG ---');
+    // --- END DEBUG LOGGING ---
+
+    // Verify that req.user and req.user.id exist
     if (!req.user || !req.user.id) {
       return res.status(401).json({
         success: false,
