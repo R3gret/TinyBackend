@@ -4,9 +4,13 @@ const db = require('../db');
 
 router.get('/', async (req, res) => {
     const { year, month } = req.query;
+    const { cdc_id } = req.user; // Get cdc_id from authenticated user
     let connection;
 
     // Input validation
+    if (!cdc_id) {
+        return res.status(403).json({ success: false, message: 'User is not associated with a CDC.' });
+    }
     if (!year || !month || isNaN(year) || isNaN(month)) {
         return res.status(400).json({ 
             success: false, 
@@ -14,22 +18,19 @@ router.get('/', async (req, res) => {
         });
     }
 
-    console.log(`Fetching scheduled dates for ${year}-${month}`);
+    console.log(`Fetching scheduled dates for ${year}-${month} for cdc_id: ${cdc_id}`);
 
     try {
         connection = await db.promisePool.getConnection();
-        
-        // First verify the connection
-        await connection.ping();
         
         const query = `
           SELECT DISTINCT DATE_FORMAT(wp.date, '%Y-%m-%d') AS date 
           FROM weekly_plans wp
           JOIN scheduled_activity sa ON wp.plan_id = sa.plan_id
-          WHERE YEAR(wp.date) = ? AND MONTH(wp.date) = ?
+          WHERE YEAR(wp.date) = ? AND MONTH(wp.date) = ? AND wp.cdc_id = ?
         `;
 
-        const [results] = await connection.query(query, [year, month]);
+        const [results] = await connection.query(query, [year, month, cdc_id]);
 
         const dates = results.map(row => row.date);
         console.log('Scheduled dates:', dates);
