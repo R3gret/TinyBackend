@@ -4,9 +4,13 @@ const db = require('../db');
 
 router.get('/', async (req, res) => {
   const { date } = req.query;
+  const { cdc_id } = req.user; // Get cdc_id from authenticated user
   let connection;
 
   // Input validation
+  if (!cdc_id) {
+    return res.status(403).json({ success: false, message: 'User is not associated with a CDC.' });
+  }
   if (!date || !date.match(/^\d{4}-\d{2}-\d{2}$/)) {
     return res.status(400).json({ 
       success: false, 
@@ -14,20 +18,19 @@ router.get('/', async (req, res) => {
     });
   }
 
-  console.log(`Fetching activities for date: ${date}`);
+  console.log(`Fetching activities for date: ${date} and cdc_id: ${cdc_id}`);
 
   try {
     connection = await db.promisePool.getConnection();
-    await connection.ping(); // Verify connection
     
     const query = `
       SELECT a.* 
       FROM scheduled_activity a
       JOIN weekly_plans w ON a.plan_id = w.plan_id
-      WHERE DATE(w.date) = ?
+      WHERE DATE(w.date) = ? AND w.cdc_id = ?
     `;
 
-    const [results] = await connection.query(query, [date]);
+    const [results] = await connection.query(query, [date, cdc_id]);
 
     console.log('Activities found:', results);
     res.json({
