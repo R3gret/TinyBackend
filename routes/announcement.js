@@ -121,4 +121,60 @@ router.post('/', upload.single('attachment'), async (req, res) => {
   }
 });
 
+// GET /api/announcements - Fetch all announcements for the user's CDC
+router.get('/', async (req, res) => {
+  const user = req.user;
+  let connection;
+
+  if (!user || !user.cdc_id) {
+    return res.status(403).json({
+      success: false,
+      message: 'User CDC information not found in token.'
+    });
+  }
+
+  try {
+    connection = await db.promisePool.getConnection();
+
+    const [results] = await connection.query(
+      `SELECT 
+        a.id,
+        a.title,
+        a.message,
+        a.author_name as author,
+        a.age_filter as ageFilter,
+        a.created_at as createdAt,
+        a.attachment_path as attachmentUrl,
+        a.attachment_name as attachmentName
+      FROM announcements a
+      WHERE a.cdc_id = ?
+      ORDER BY a.created_at DESC`,
+      [user.cdc_id]
+    );
+
+    const announcements = results.map(announcement => ({
+      ...announcement,
+      createdAt: new Date(announcement.createdAt).toISOString(),
+      attachmentUrl: announcement.attachmentUrl
+        ? `${req.protocol}://${req.get('host')}/uploads/announcements/${path.basename(announcement.attachmentUrl)}`
+        : null
+    }));
+
+    res.json({
+      success: true,
+      announcements
+    });
+
+  } catch (err) {
+    console.error('Database error fetching announcements:', err);
+    res.status(500).json({
+      success: false,
+      message: 'Failed to fetch announcements'
+    });
+  } finally {
+    if (connection) connection.release();
+  }
+});
+
+
 module.exports = router;
