@@ -4,24 +4,6 @@ const db = require('../db');
 const multer = require('multer');
 const path = require('path');
 const fs = require('fs');
-const jwt = require('jsonwebtoken');
-
-// JWT verification helper
-const verifyToken = (req, res, next) => {
-  const token = req.headers.authorization?.split(' ')[1];
-  if (!token) {
-    return res.status(401).json({ success: false, message: 'Authorization token required' });
-  }
-
-  try {
-    const decoded = jwt.verify(token, process.env.JWT_SECRET);
-    req.user = decoded;
-    next();
-  } catch (err) {
-    console.error('JWT verification error:', err);
-    return res.status(403).json({ success: false, message: 'Invalid token' });
-  }
-};
 
 // Configure multer for file uploads
 const storage = multer.diskStorage({
@@ -40,7 +22,7 @@ const storage = multer.diskStorage({
 const upload = multer({ storage });
 
 // GET /api/categories - Returns all categories
-router.get('/categories', verifyToken, async (req, res) => {
+router.get('/categories', async (req, res) => {
   let connection;
   try {
     connection = await db.promisePool.getConnection();
@@ -62,7 +44,7 @@ router.get('/categories', verifyToken, async (req, res) => {
 });
 
 // GET /api/age-groups - Returns all age groups
-router.get('/age-groups', verifyToken, async (req, res) => {
+router.get('/age-groups', async (req, res) => {
   let connection;
   try {
     connection = await db.promisePool.getConnection();
@@ -180,46 +162,38 @@ router.get('/filtered-classworks', async (req, res) => {
 });
 
 // GET /api/files - Takes category_id and age_group_id as query params
-router.get('/', verifyToken, async (req, res) => {
+router.get('/', async (req, res) => {
   const { category_id, age_group_id } = req.query;
-  
+  const { cdc_id: userCdcId } = req.user;
+
   if (!category_id || !age_group_id) {
-    return res.status(400).json({ 
-      success: false, 
-      message: 'Both category_id and age_group_id are required' 
+    return res.status(400).json({
+      success: false,
+      message: 'Both category_id and age_group_id are required'
     });
   }
 
   let connection;
   try {
     connection = await db.promisePool.getConnection();
-    
-    // Get user's CDC ID
-    const [user] = await connection.query(
-      'SELECT cdc_id FROM users WHERE id = ?',
-      [req.user.id]
-    );
-    
-    if (!user.length || !user[0].cdc_id) {
+
+    if (!userCdcId) {
       return res.status(403).json({
         success: false,
-        message: 'User CDC information not found'
+        message: 'User is not associated with a CDC. Access denied.'
       });
     }
 
-    const userCdcId = user[0].cdc_id;
-    
-    // Query files with CDC filter
-    const [results] = await connection.query(
-      `SELECT f.* 
-       FROM files f
-       JOIN users u ON f.id = u.id
-       WHERE f.category_id = ? 
-       AND f.age_group_id = ?
-       AND u.cdc_id = ?`,
-      [category_id, age_group_id, userCdcId]
-    );
-    
+    const query = `
+      SELECT f.* 
+      FROM files f
+      JOIN users u ON f.id = u.id
+      WHERE f.category_id = ? AND f.age_group_id = ? AND u.cdc_id = ?
+    `;
+    const params = [category_id, age_group_id, userCdcId];
+
+    const [results] = await connection.query(query, params);
+
     return res.json({
       success: true,
       files: results
@@ -236,9 +210,10 @@ router.get('/', verifyToken, async (req, res) => {
 });
 
 // POST /api/files - Handles file uploads
-router.post('/', verifyToken, upload.single('file_data'), async (req, res) => {
+router.post('/', upload.single('file_data'), async (req, res) => {
   const { category_id, age_group_id, file_name } = req.body;
   const file = req.file;
+  const { id: userId, cdc_id: userCdcId } = req.user;
 
   if (!category_id || !age_group_id || !file_name || !file) {
     if (file) fs.unlinkSync(file.path);
@@ -254,18 +229,14 @@ router.post('/', verifyToken, upload.single('file_data'), async (req, res) => {
     const fileData = await fs.promises.readFile(file.path);
     connection = await db.promisePool.getConnection();
 
-    // Get user's CDC ID
-    const [user] = await connection.query(
-      'SELECT id, cdc_id FROM users WHERE id = ?',
-      [req.user.id]
-    );
-    
-    if (!user.length || !user[0].cdc_id) {
-      throw new Error('User CDC information not found');
+    // For file uploads, the user must be associated with a CDC, even a President
+    if (!userCdcId) {
+        if (file) fs.unlinkSync(file.path);
+        return res.status(403).json({
+            success: false,
+            message: 'User must be associated with a CDC to upload files.'
+        });
     }
-
-    const userId = user[0].id;
-    const userCdcId = user[0].cdc_id;
 
     const [result] = await connection.query(
       `INSERT INTO files 
@@ -303,36 +274,30 @@ router.post('/', verifyToken, upload.single('file_data'), async (req, res) => {
 });
 
 // GET /api/files/download/:fileId - Handles file downloads
-router.get('/download/:fileId', verifyToken, async (req, res) => {
+router.get('/download/:fileId', async (req, res) => {
   const { fileId } = req.params;
+  const { cdc_id: userCdcId } = req.user;
 
   let connection;
   try {
     connection = await db.promisePool.getConnection();
-    
-    // Get user's CDC ID
-    const [user] = await connection.query(
-      'SELECT cdc_id FROM users WHERE id = ?',
-      [req.user.id]
-    );
-    
-    if (!user.length || !user[0].cdc_id) {
+
+    if (!userCdcId) {
       return res.status(403).json({
         success: false,
-        message: 'User CDC information not found'
+        message: 'User is not associated with a CDC. Access denied.'
       });
     }
 
-    const userCdcId = user[0].cdc_id;
-    
-    // Verify the file belongs to the user's CDC
-    const [results] = await connection.query(
-      `SELECT f.file_name, f.file_type, f.file_data 
-       FROM files f
-       JOIN users u ON f.id = u.id
-       WHERE f.file_id = ? AND u.cdc_id = ?`,
-      [fileId, userCdcId]
-    );
+    const query = `
+      SELECT f.file_name, f.file_type, f.file_data 
+      FROM files f
+      JOIN users u ON f.id = u.id
+      WHERE f.file_id = ? AND u.cdc_id = ?
+    `;
+    const params = [fileId, userCdcId];
+
+    const [results] = await connection.query(query, params);
 
     if (results.length === 0) {
       return res.status(404).json({ 
@@ -358,43 +323,38 @@ router.get('/download/:fileId', verifyToken, async (req, res) => {
 });
 
 // GET /api/files/counts - Returns file counts per category for a specific age group
-router.get('/counts', verifyToken, async (req, res) => {
+router.get('/counts', async (req, res) => {
   const { age_group_id } = req.query;
-  
+  const { cdc_id: userCdcId } = req.user;
+
   if (!age_group_id) {
-    return res.status(400).json({ 
-      success: false, 
-      message: 'age_group_id is required' 
+    return res.status(400).json({
+      success: false,
+      message: 'age_group_id is required'
     });
   }
 
   let connection;
   try {
     connection = await db.promisePool.getConnection();
-    
-    // Get user's CDC ID
-    const [user] = await connection.query(
-      'SELECT cdc_id FROM users WHERE id = ?',
-      [req.user.id]
-    );
-    
-    if (!user.length || !user[0].cdc_id) {
+
+    if (!userCdcId) {
       return res.status(403).json({
         success: false,
-        message: 'User CDC information not found'
+        message: 'User is not associated with a CDC. Access denied.'
       });
     }
 
-    const userCdcId = user[0].cdc_id;
-    
-    const [results] = await connection.query(
-      `SELECT f.category_id, COUNT(*) as count 
-       FROM files f
-       JOIN users u ON f.id = u.id
-       WHERE f.age_group_id = ? AND u.cdc_id = ?
-       GROUP BY f.category_id`,
-      [age_group_id, userCdcId]
-    );
+    const query = `
+      SELECT f.category_id, COUNT(*) as count 
+      FROM files f
+      JOIN users u ON f.id = u.id
+      WHERE f.age_group_id = ? AND u.cdc_id = ?
+      GROUP BY f.category_id
+    `;
+    const params = [age_group_id, userCdcId];
+
+    const [results] = await connection.query(query, params);
 
     const counts = {};
     results.forEach(row => {
