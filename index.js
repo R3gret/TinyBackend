@@ -62,6 +62,7 @@ app.use('/api/workers', require('./routes/workers')); // Use the new worker rout
 const adminParentListRoutes = require('./routes/adminparentlist');
 const workerRoutes = require('./routes/workers'); // Import the new worker routes
 const authenticate = require('./routes/authMiddleware');
+const parentAnnouncementRoutes = require('./routes/parentannouncements');
 
 app.use('/api/parent-announcements', parentAnnouncementRoutes);
 app.use('/api/admin-parent-list', adminParentListRoutes);
