@@ -38,7 +38,7 @@ router.post('/', loginLimiter, validateLogin, async (req, res) => {
     connection = await db.promisePool.getConnection();
     
     const [results] = await connection.query({
-      sql: 'SELECT id, username, password, type FROM users WHERE username = ?',
+      sql: 'SELECT id, username, password, type, cdc_id FROM users WHERE username = ?',
       timeout: 5000
     }, [username]);
 
