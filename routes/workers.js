@@ -4,24 +4,25 @@ const db = require('../db');
 const { body, validationResult } = require('express-validator');
 const bcrypt = require('bcryptjs');
 
-// Helper function to get the logged-in user's CDC ID
-const getLoggedInUserCdcId = async (userId) => {
-  const [user] = await db.promisePool.query('SELECT cdc_id FROM users WHERE id = ?', [userId]);
-  if (user.length === 0 || !user[0].cdc_id) {
-    throw new Error('User not found or not associated with a CDC');
+// Middleware to check if the user is associated with a CDC
+const hasCdcAssociation = (req, res, next) => {
+  if (!req.user || !req.user.cdc_id) {
+    return res.status(403).json({ success: false, message: 'User is not associated with a CDC. Access denied.' });
   }
-  return user[0].cdc_id;
+  next();
 };
+
+// Apply the middleware to all routes in this file
+router.use(hasCdcAssociation);
 
 // GET all workers for the logged-in user's CDC
 router.get('/', async (req, res) => {
   try {
-    const loggedInUserId = req.user.id;
-    const cdcId = await getLoggedInUserCdcId(loggedInUserId);
+    const { cdc_id } = req.user;
     const { search } = req.query;
 
     let query = 'SELECT id, username, profile_pic FROM users WHERE type = \'worker\' AND cdc_id = ?';
-    const params = [cdcId];
+    const params = [cdc_id];
 
     if (search) {
       query += ' AND username LIKE ?';
@@ -47,8 +48,7 @@ router.post('/', [
   }
 
   try {
-    const loggedInUserId = req.user.id;
-    const cdcId = await getLoggedInUserCdcId(loggedInUserId);
+    const { cdc_id } = req.user;
     const { username, password } = req.body;
 
     const [existingUser] = await db.promisePool.query('SELECT id FROM users WHERE username = ?', [username]);
@@ -60,7 +60,7 @@ router.post('/', [
 
     const [result] = await db.promisePool.query(
       'INSERT INTO users (username, password, type, cdc_id) VALUES (?, ?, \'worker\', ?)',
-      [username, hashedPassword, cdcId]
+      [username, hashedPassword, cdc_id]
     );
 
     res.status(201).json({ success: true, message: 'Worker created successfully', data: { id: result.insertId, username } });
@@ -80,12 +80,11 @@ router.put('/:id', [
   }
 
   try {
-    const loggedInUserId = req.user.id;
-    const cdcId = await getLoggedInUserCdcId(loggedInUserId);
+    const { cdc_id } = req.user;
     const workerId = req.params.id;
     const { username, password } = req.body;
 
-    const [worker] = await db.promisePool.query('SELECT * FROM users WHERE id = ? AND cdc_id = ? AND type = \'worker\'', [workerId, cdcId]);
+    const [worker] = await db.promisePool.query('SELECT * FROM users WHERE id = ? AND cdc_id = ? AND type = \'worker\'', [workerId, cdc_id]);
     if (worker.length === 0) {
       return res.status(404).json({ success: false, message: 'Worker not found in your CDC' });
     }
@@ -111,13 +110,12 @@ router.put('/:id', [
 // DELETE a worker by ID
 router.delete('/:id', async (req, res) => {
   try {
-    const loggedInUserId = req.user.id;
-    const cdcId = await getLoggedInUserCdcId(loggedInUserId);
+    const { cdc_id } = req.user;
     const workerId = req.params.id;
 
     const [result] = await db.promisePool.query(
       'DELETE FROM users WHERE id = ? AND cdc_id = ? AND type = \'worker\'',
-      [workerId, cdcId]
+      [workerId, cdc_id]
     );
 
     if (result.affectedRows === 0) {
