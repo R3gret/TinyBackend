@@ -18,6 +18,21 @@ router.get('/', async (req, res) => {
   }
 });
 
+// Get all workers
+router.get('/workers', async (req, res) => {
+  let connection;
+  try {
+    connection = await db.promisePool.getConnection();
+    const [results] = await connection.query('SELECT id, username, type FROM users WHERE type = ?', ['worker']);
+    res.json(results);
+  } catch (err) {
+    console.error('Database error:', err);
+    res.status(500).json({ error: 'Failed to fetch workers' });
+  } finally {
+    if (connection) connection.release();
+  }
+});
+
 // Search users
 router.get('/search', async (req, res) => {
   const { query } = req.query;

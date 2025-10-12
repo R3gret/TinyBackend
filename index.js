@@ -33,6 +33,7 @@ app.use(morgan('combined'));
 
 // Body parsing
 app.use(express.json({ limit: '10kb' }));
+
 app.use(express.urlencoded({ extended: true, limit: '10kb' }));
 
 // API routes - Explicit mounting (recommended approach)

@@ -61,7 +61,7 @@ router.get('/admins', async (req, res) => {
       const [results] = await connection.query(
         `SELECT id, username, type, cdc_id 
          FROM users 
-         WHERE type = 'president'`
+         WHERE type = 'president' AND cdc_id IS NULL`
       );
       return results;
     });
@@ -341,7 +341,7 @@ router.get('/preslist', async (req, res) => {
       });
     }
 
-    const { name, region, province, municipality, barangay } = req.body;
+    const { name, region, province, municipality, barangay, president_id } = req.body;
     let connection;
 
     try {
@@ -363,6 +363,39 @@ router.get('/preslist', async (req, res) => {
         `INSERT INTO cdc (location_id, name) VALUES (?, ?)`,
         [locationId, name]
       );
+      const newCdcId = cdcResults.insertId;
+
+      // If a president_id is provided, associate them with the new CDC
+      if (president_id) {
+        // Check if the user is a president and has no CDC assigned
+        const [presidents] = await connection.query(
+          'SELECT * FROM users WHERE id = ? AND type = \'president\'',
+          [president_id]
+        );
+
+        if (presidents.length === 0) {
+          await connection.rollback();
+          return res.status(404).json({
+            success: false,
+            message: `President with ID ${president_id} not found.`
+          });
+        }
+
+        const president = presidents[0];
+        if (president.cdc_id) {
+          await connection.rollback();
+          return res.status(409).json({
+            success: false,
+            message: `President with ID ${president_id} is already assigned to a CDC.`
+          });
+        }
+
+        // Assign the new CDC to the president
+        await connection.query(
+          'UPDATE users SET cdc_id = ? WHERE id = ?',
+          [newCdcId, president_id]
+        );
+      }
 
       await connection.commit();
       
@@ -373,7 +406,7 @@ router.get('/preslist', async (req, res) => {
         FROM cdc c
         JOIN cdc_location cl ON c.location_id = cl.location_id
         WHERE c.cdc_id = ?`,
-        [cdcResults.insertId]
+        [newCdcId]
       );
 
       return res.status(201).json({
@@ -906,8 +939,7 @@ router.get('/preslist', async (req, res) => {
 
   router.post('/presidents', [
     body('username').trim().isLength({ min: 3 }).withMessage('Username must be at least 3 characters'),
-    body('password').isLength({ min: 8 }).withMessage('Password must be at least 8 characters'),
-    body('cdc_id').isInt().withMessage('Valid CDC ID is required')
+    body('password').isLength({ min: 8 }).withMessage('Password must be at least 8 characters')
   ], async (req, res) => {
     const errors = validationResult(req);
     if (!errors.isEmpty()) {
@@ -923,32 +955,7 @@ router.get('/preslist', async (req, res) => {
       connection = await db.promisePool.getConnection();
       await connection.beginTransaction();
 
-      // Use both cdc_id and cdcId for compatibility
-      const cdcId = req.body.cdc_id || req.body.cdcId;
       const { username, password } = req.body;
-
-      if (!cdcId) {
-        await connection.rollback();
-        return res.status(400).json({
-          success: false,
-          message: 'CDC ID is required'
-        });
-      }
-
-      // Verify CDC exists - more thorough check
-      const [cdcCheck] = await connection.query(
-        `SELECT 1 FROM cdc WHERE cdc_id = ? LIMIT 1`,
-        [cdcId]
-      );
-
-      if (cdcCheck.length === 0) {
-        await connection.rollback();
-        return res.status(404).json({
-          success: false,
-          message: 'CDC not found',
-          details: `CDC with ID ${cdcId} doesn't exist`
-        });
-      }
 
       // Check for existing username
       const [existingUser] = await connection.query(
@@ -980,9 +987,9 @@ router.get('/preslist', async (req, res) => {
       // Insert user with explicit field names
       const [insertResults] = await connection.query(
         `INSERT INTO users 
-        (username, type, password, cdc_id) 
-        VALUES (?, 'president', ?, ?)`,
-        [username, hashedPassword, cdcId]
+        (username, type, password) 
+        VALUES (?, 'president', ?)`,
+        [username, hashedPassword]
       );
 
       await connection.commit();
