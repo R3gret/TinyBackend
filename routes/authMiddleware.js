@@ -15,42 +15,32 @@ const authenticate = (req, res, next) => {
   
   try {
     const decoded = jwt.verify(token, process.env.JWT_SECRET || 'your-secret-key');
-    
-    // --- START DEBUG LOGGING ---
-    console.log('--- AUTH MIDDLEWARE DEBUG ---');
-    console.log('Decoded token payload:', JSON.stringify(decoded, null, 2));
-    // --- END DEBUG LOGGING ---
 
-    // Explicitly assign the nested user object
+    // Assign the nested user object to req.user
     req.user = decoded.user;
 
-    // --- START DEBUG LOGGING ---
-    console.log('Assigned req.user:', JSON.stringify(req.user, null, 2));
-    console.log('--- END AUTH MIDDLEWARE DEBUG ---');
-    // --- END DEBUG LOGGING ---
-
-    // Verify that req.user and req.user.id exist
+    // Critical Check: Ensure req.user exists and has an ID
     if (!req.user || !req.user.id) {
       return res.status(401).json({
         success: false,
-        message: 'Invalid token payload: User ID missing.'
+        message: 'Invalid token: User information is missing.'
       });
     }
 
     next();
-  } catch (err) {
+  } catch (error) {
     // More specific error messages
     let message = 'Invalid token';
-    if (err.name === 'TokenExpiredError') {
+    if (error.name === 'TokenExpiredError') {
       message = 'Token expired';
-    } else if (err.name === 'JsonWebTokenError') {
+    } else if (error.name === 'JsonWebTokenError') {
       message = 'Malformed token';
     }
     
     return res.status(401).json({ 
       success: false, 
       message,
-      error: err.name 
+      error: error.name 
     });
   }
 };

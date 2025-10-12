@@ -59,9 +59,6 @@ router.post('/', loginLimiter, validateLogin, async (req, res) => {
       });
     }
 
-    // TEMPORARY DEBUG LOG: Log the user object after fetching from DB
-    console.log('User data from DB during login:', user);
-
     // Create JWT with user object
     const payload = {
       user: {

@@ -36,6 +36,8 @@ app.use(express.json({ limit: '10kb' }));
 
 app.use(express.urlencoded({ extended: true, limit: '10kb' }));
 
+const authenticate = require('./routes/authMiddleware');
+
 // API routes - Explicit mounting (recommended approach)
 app.use('/api/login', require('./routes/login'));
 app.use('/api/students', require('./routes/students'));
@@ -52,21 +54,13 @@ app.use('/api/files', require('./routes/fileRoutes'));
 app.use('/api/announcements', require('./routes/announcement'));
 app.use('/api/cdc', require('./routes/insert_cdc'));
 app.use('/api/parent', require('./routes/parent'));
-app.use('/api/admin', require('./routes/adminparentlist'));
+app.use('/api/admin-parent-list', require('./routes/adminparentlist'));
 app.use('/api/dash', require('./routes/studentsdash'));
 app.use('/api/att', require('./routes/studattendance'));
 app.use('/api/dom', require('./routes/domainstud'));
 app.use('/api/submissions', require('./routes/submissions'));
-app.use('/api/parentannouncements', require('./routes/parentannouncements'));
-app.use('/api/workers', require('./routes/workers')); // Use the new worker routes
-const adminParentListRoutes = require('./routes/adminparentlist');
-const workerRoutes = require('./routes/workers'); // Import the new worker routes
-const authenticate = require('./routes/authMiddleware');
-const parentAnnouncementRoutes = require('./routes/parentannouncements');
-
-app.use('/api/parent-announcements', parentAnnouncementRoutes);
-app.use('/api/admin-parent-list', adminParentListRoutes);
-app.use('/api/workers', authenticate, workerRoutes); // Use the new worker routes
+app.use('/api/parent-announcements', require('./routes/parentannouncements'));
+app.use('/api/workers', authenticate, require('./routes/workers')); // Use the new worker routes
 
 // Static files
 app.use('/uploads/announcements', express.static(path.join(__dirname, 'uploads/announcements')));
