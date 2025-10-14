@@ -21,12 +21,18 @@ const storage = multer.diskStorage({
 
 const upload = multer({ storage });
 
-// GET /api/categories - Returns all categories
+// GET /api/categories - Returns all categories for the user's CDC
 router.get('/categories', async (req, res) => {
+  const { cdc_id: userCdcId } = req.user;
   let connection;
+
+  if (!userCdcId) {
+    return res.status(403).json({ success: false, message: 'User is not associated with a CDC. Access denied.' });
+  }
+
   try {
     connection = await db.promisePool.getConnection();
-    const [results] = await connection.query('SELECT * FROM domain_file_categories');
+    const [results] = await connection.query('SELECT * FROM domain_file_categories WHERE cdc_id = ?', [userCdcId]);
     
     return res.json({
       success: true,
@@ -43,126 +49,130 @@ router.get('/categories', async (req, res) => {
   }
 });
 
-// GET /api/age-groups - Returns all age groups
-router.get('/age-groups', async (req, res) => {
+// POST /api/files/categories - Create a new category for the user's CDC
+router.post('/categories', async (req, res) => {
+  const { category_name } = req.body;
+  const { cdc_id: userCdcId } = req.user;
+
+  if (!userCdcId) {
+    return res.status(403).json({ success: false, message: 'User must be associated with a CDC to create a category.' });
+  }
+  if (!category_name) {
+    return res.status(400).json({ success: false, message: 'Category name is required' });
+  }
+
   let connection;
   try {
     connection = await db.promisePool.getConnection();
-    const [results] = await connection.query('SELECT * FROM age_groups');
-    
-    // Format the age ranges properly
-    const formattedResults = results.map(group => ({
-      ...group,
-      age_range: group.age_range.replace(/\?/g, '-')
-    }));
-    
-    return res.json({
+    const [result] = await connection.query(
+      'INSERT INTO domain_file_categories (category_name, cdc_id) VALUES (?, ?)',
+      [category_name, userCdcId]
+    );
+    res.status(201).json({
       success: true,
-      ageGroups: formattedResults
+      message: 'Category created successfully',
+      category: { category_id: result.insertId, category_name, cdc_id: userCdcId }
     });
   } catch (err) {
     console.error('Database query error:', err);
-    return res.status(500).json({ 
-      success: false, 
-      message: 'Failed to fetch age groups' 
+    // Check for duplicate entry
+    if (err.code === 'ER_DUP_ENTRY') {
+      return res.status(409).json({ success: false, message: 'Category name already exists' });
+    }
+    return res.status(500).json({
+      success: false,
+      message: 'Failed to create category'
     });
   } finally {
     if (connection) connection.release();
   }
 });
 
-// Add this to your parentannouncements.js file
+// PUT /api/files/categories/:id - Update a category within the user's CDC
+router.put('/categories/:id', async (req, res) => {
+  const { id } = req.params;
+  const { category_name } = req.body;
+  const { cdc_id: userCdcId } = req.user;
 
-// GET /api/parentannouncements/filtered-classworks - Returns classworks filtered by student's age and CDC
-router.get('/filtered-classworks', async (req, res) => {
+  if (!userCdcId) {
+    return res.status(403).json({ success: false, message: 'User is not associated with a CDC. Access denied.' });
+  }
+  if (!category_name) {
+    return res.status(400).json({ success: false, message: 'Category name is required' });
+  }
+
   let connection;
-  
   try {
-    // Get student info (reusing the same middleware as announcements)
-    const { student_id, age, cdc_id } = await getStudentInfo(req);
     connection = await db.promisePool.getConnection();
-
-    // Determine age group (same logic as announcements)
-    let ageGroup;
-    if (age >= 3 && age < 4) {
-      ageGroup = '3-4';
-    } else if (age >= 4 && age < 5) {
-      ageGroup = '4-5';
-    } else if (age >= 5 && age <= 6) {
-      ageGroup = '5-6';
-    } else {
-      ageGroup = 'other';
-    }
-
-    // Query classworks that match:
-    // 1. The student's age group OR 'all' age filter
-    // AND
-    // 2. Either:
-    //    - No specific CDC (cdc_id IS NULL) - applies to all CDCs
-    //    - OR matches the student's CDC (cdc_id = student's cdc_id)
-    const [classworks] = await connection.query(
-      `SELECT 
-        c.*, 
-        cat.category_name,
-        ag.age_range,
-        u.name as author_name
-       FROM classworks c
-       JOIN domain_file_categories cat ON c.category_id = cat.category_id
-       JOIN age_groups ag ON c.age_group_id = ag.age_group_id
-       LEFT JOIN users u ON c.author_id = u.id
-       WHERE (ag.age_range = ? OR ag.age_range = 'all')
-       AND (c.cdc_id IS NULL OR c.cdc_id = ?)
-       ORDER BY c.created_at DESC`,
-      [ageGroup, cdc_id]
+    const [result] = await connection.query(
+      'UPDATE domain_file_categories SET category_name = ? WHERE category_id = ? AND cdc_id = ?',
+      [category_name, id, userCdcId]
     );
 
-    // Format the results
-    const formattedClassworks = classworks.map(cw => ({
-      ...cw,
-      age_range: cw.age_range.replace(/\?/g, '-')
-    }));
+    if (result.affectedRows === 0) {
+      return res.status(404).json({ success: false, message: 'Category not found or not owned by your CDC' });
+    }
 
-    return res.json({
+    res.json({
       success: true,
-      student_id,
-      age,
-      ageGroup,
-      cdc_id,
-      classworks: formattedClassworks
+      message: 'Category updated successfully'
     });
   } catch (err) {
-    console.error('Error fetching filtered classworks:', {
-      message: err.message,
-      stack: err.stack,
-      sql: err.sql,
-      code: err.code
-    });
-    
-    if (err.message === 'Unauthorized') {
-      return res.status(401).json({ success: false, message: 'Unauthorized' });
+    console.error('Database query error:', err);
+    if (err.code === 'ER_DUP_ENTRY') {
+      return res.status(409).json({ success: false, message: 'Category name already exists' });
     }
-    if (err.message === 'Parent not found') {
-      return res.status(403).json({ success: false, message: 'Access denied' });
-    }
-    if (err.message === 'Student not found for this parent') {
-      return res.status(404).json({ success: false, message: 'No associated student found' });
-    }
-    
-    return res.status(500).json({ 
-      success: false, 
-      message: 'Database error',
-      errorDetails: process.env.NODE_ENV === 'development' ? {
-        message: err.message,
-        code: err.code
-      } : undefined
+    return res.status(500).json({
+      success: false,
+      message: 'Failed to update category'
     });
   } finally {
     if (connection) connection.release();
   }
 });
 
-// GET /api/files - Takes category_id and age_group_id as query params
-router.get('/', async (req, res) => {
+// DELETE /api/files/categories/:id - Delete a category within the user's CDC
+router.delete('/categories/:id', async (req, res) => {
+  const { id } = req.params;
+  const { cdc_id: userCdcId } = req.user;
+
+  if (!userCdcId) {
+    return res.status(403).json({ success: false, message: 'User is not associated with a CDC. Access denied.' });
+  }
+
+  let connection;
+  try {
+    connection = await db.promisePool.getConnection();
+    const [result] = await connection.query(
+      'DELETE FROM domain_file_categories WHERE category_id = ? AND cdc_id = ?',
+      [id, userCdcId]
+    );
+
+    if (result.affectedRows === 0) {
+      return res.status(404).json({ success: false, message: 'Category not found or not owned by your CDC' });
+    }
+
+    res.json({
+      success: true,
+      message: 'Category deleted successfully'
+    });
+  } catch (err) {
+    console.error('Database query error:', err);
+     // Handle foreign key constraint error
+    if (err.code === 'ER_ROW_IS_REFERENCED_2') {
+        return res.status(409).json({ success: false, message: 'Cannot delete category as it is currently in use by existing files.' });
+    }
+    return res.status(500).json({
+      success: false,
+      message: 'Failed to delete category'
+    });
+  } finally {
+    if (connection) connection.release();
+  }
+});
+
+// GET /api/age-groups - Returns all age groups
+router.get('/age-groups', async (req, res) => {
   const { category_id, age_group_id } = req.query;
   const { cdc_id: userCdcId } = req.user;
 
@@ -272,6 +282,99 @@ router.post('/', upload.single('file_data'), async (req, res) => {
     if (connection) connection.release();
   }
 });
+
+// PUT /api/files/:id - Rename a file
+router.put('/:id', async (req, res) => {
+  const { id: fileId } = req.params;
+  const { file_name } = req.body;
+  const { cdc_id: userCdcId } = req.user;
+
+  if (!file_name) {
+    return res.status(400).json({ success: false, message: 'New file name is required' });
+  }
+  if (!userCdcId) {
+    return res.status(403).json({ success: false, message: 'User is not associated with a CDC. Access denied.' });
+  }
+
+  let connection;
+  try {
+    connection = await db.promisePool.getConnection();
+    const [result] = await connection.query(
+      'UPDATE files SET file_name = ? WHERE file_id = ? AND cdc_id = ?',
+      [file_name, fileId, userCdcId]
+    );
+
+    if (result.affectedRows === 0) {
+      return res.status(404).json({ success: false, message: 'File not found or you do not have permission to edit it.' });
+    }
+
+    res.json({ success: true, message: 'File renamed successfully.' });
+  } catch (err) {
+    console.error('Database query error:', err);
+    return res.status(500).json({
+      success: false,
+      message: 'Failed to rename file.'
+    });
+  } finally {
+    if (connection) connection.release();
+  }
+});
+
+// DELETE /api/files/:id - Delete a file
+router.delete('/:id', async (req, res) => {
+  const { id: fileId } = req.params;
+  const { cdc_id: userCdcId } = req.user;
+
+  if (!userCdcId) {
+    return res.status(403).json({ success: false, message: 'User is not associated with a CDC. Access denied.' });
+  }
+
+  let connection;
+  try {
+    connection = await db.promisePool.getConnection();
+    await connection.beginTransaction();
+
+    // First, get the file path before deleting the record
+    const [files] = await connection.query(
+      'SELECT file_path FROM files WHERE file_id = ? AND cdc_id = ?',
+      [fileId, userCdcId]
+    );
+
+    if (files.length === 0) {
+      await connection.rollback();
+      return res.status(404).json({ success: false, message: 'File not found or you do not have permission to delete it.' });
+    }
+    
+    const filePath = files[0].file_path;
+
+    // Next, delete the database record
+    const [result] = await connection.query(
+      'DELETE FROM files WHERE file_id = ? AND cdc_id = ?',
+      [fileId, userCdcId]
+    );
+
+    if (result.affectedRows > 0 && filePath) {
+      // Finally, delete the physical file from the server
+      if (fs.existsSync(filePath)) {
+        fs.unlinkSync(filePath);
+      }
+    }
+    
+    await connection.commit();
+    res.json({ success: true, message: 'File deleted successfully.' });
+
+  } catch (err) {
+    if (connection) await connection.rollback();
+    console.error('Database query error:', err);
+    return res.status(500).json({
+      success: false,
+      message: 'Failed to delete file.'
+    });
+  } finally {
+    if (connection) connection.release();
+  }
+});
+
 
 // GET /api/files/download/:fileId - Handles file downloads
 router.get('/download/:fileId', async (req, res) => {
