@@ -105,9 +105,10 @@ router.get('/get-age-groups', async (req, res) => {
   }
 });
 
-// GET /api/files/get-categories - Returns all categories for the user's CDC
+// GET /api/files/get-categories - Returns all categories for the user's CDC, optionally filtered by age_group_id
 router.get('/get-categories', async (req, res) => {
   const { cdc_id: userCdcId } = req.user;
+  const { age_group_id } = req.query; // Get age_group_id from query params
   let connection;
 
   if (!userCdcId) {
@@ -116,7 +117,17 @@ router.get('/get-categories', async (req, res) => {
 
   try {
     connection = await db.promisePool.getConnection();
-    const [results] = await connection.query('SELECT * FROM domain_file_categories WHERE cdc_id = ?', [userCdcId]);
+    
+    let query = 'SELECT * FROM domain_file_categories WHERE cdc_id = ?';
+    const params = [userCdcId];
+
+    // If age_group_id is provided, add it to the filter
+    if (age_group_id) {
+      query += ' AND age_group_id = ?';
+      params.push(age_group_id);
+    }
+
+    const [results] = await connection.query(query, params);
     
     return res.json({
       success: true,
@@ -135,27 +146,27 @@ router.get('/get-categories', async (req, res) => {
 
 // POST /api/files/categories - Create a new category for the user's CDC
 router.post('/categories', async (req, res) => {
-  const { category_name } = req.body;
+  const { category_name, age_group_id } = req.body;
   const { cdc_id: userCdcId } = req.user;
 
   if (!userCdcId) {
     return res.status(403).json({ success: false, message: 'User must be associated with a CDC to create a category.' });
   }
-  if (!category_name) {
-    return res.status(400).json({ success: false, message: 'Category name is required' });
+  if (!category_name || !age_group_id) {
+    return res.status(400).json({ success: false, message: 'Category name and age_group_id are required' });
   }
 
   let connection;
   try {
     connection = await db.promisePool.getConnection();
     const [result] = await connection.query(
-      'INSERT INTO domain_file_categories (category_name, cdc_id) VALUES (?, ?)',
-      [category_name, userCdcId]
+      'INSERT INTO domain_file_categories (category_name, cdc_id, age_group_id) VALUES (?, ?, ?)',
+      [category_name, userCdcId, age_group_id]
     );
     res.status(201).json({
       success: true,
       message: 'Category created successfully',
-      category: { category_id: result.insertId, category_name, cdc_id: userCdcId }
+      category: { category_id: result.insertId, category_name, cdc_id: userCdcId, age_group_id }
     });
   } catch (err) {
     console.error('Database query error:', err);
