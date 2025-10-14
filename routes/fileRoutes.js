@@ -21,7 +21,111 @@ const storage = multer.diskStorage({
 
 const upload = multer({ storage });
 
-// GET /api/categories - Returns all categories for the user's CDC
+// --- Specific Routes First ---
+
+// GET /api/files/counts - Returns file counts per category for a specific age group
+router.get('/counts', async (req, res) => {
+  const { age_group_id } = req.query;
+  const { cdc_id: userCdcId } = req.user;
+
+  if (!age_group_id) {
+    return res.status(400).json({
+      success: false,
+      message: 'age_group_id is required'
+    });
+  }
+
+  let connection;
+  try {
+    connection = await db.promisePool.getConnection();
+
+    if (!userCdcId) {
+      return res.status(403).json({
+        success: false,
+        message: 'User is not associated with a CDC. Access denied.'
+      });
+    }
+
+    const query = `
+      SELECT f.category_id, COUNT(*) as count 
+      FROM files f
+      JOIN users u ON f.id = u.id
+      WHERE f.age_group_id = ? AND u.cdc_id = ?
+      GROUP BY f.category_id
+    `;
+    const params = [age_group_id, userCdcId];
+
+    const [results] = await connection.query(query, params);
+
+    const counts = {};
+    results.forEach(row => {
+      counts[row.category_id] = row.count;
+    });
+
+    return res.json({
+      success: true,
+      counts
+    });
+  } catch (err) {
+    console.error('Database query error:', err);
+    return res.status(500).json({ 
+      success: false, 
+      message: 'Failed to fetch file counts' 
+    });
+  } finally {
+    if (connection) connection.release();
+  }
+});
+
+// GET /api/files/age-groups - Returns all age groups
+router.get('/age-groups', async (req, res) => {
+  const { category_id, age_group_id } = req.query;
+  const { cdc_id: userCdcId } = req.user;
+
+  if (!category_id || !age_group_id) {
+    return res.status(400).json({
+      success: false,
+      message: 'Both category_id and age_group_id are required'
+    });
+  }
+
+  let connection;
+  try {
+    connection = await db.promisePool.getConnection();
+
+    if (!userCdcId) {
+      return res.status(403).json({
+        success: false,
+        message: 'User is not associated with a CDC. Access denied.'
+      });
+    }
+
+    const query = `
+      SELECT f.* 
+      FROM files f
+      JOIN users u ON f.id = u.id
+      WHERE f.category_id = ? AND f.age_group_id = ? AND u.cdc_id = ?
+    `;
+    const params = [category_id, age_group_id, userCdcId];
+
+    const [results] = await connection.query(query, params);
+
+    return res.json({
+      success: true,
+      files: results
+    });
+  } catch (err) {
+    console.error('Database query error:', err);
+    return res.status(500).json({ 
+      success: false, 
+      message: 'Failed to fetch files' 
+    });
+  } finally {
+    if (connection) connection.release();
+  }
+});
+
+// GET /api/files/categories - Returns all categories for the user's CDC
 router.get('/categories', async (req, res) => {
   const { cdc_id: userCdcId } = req.user;
   let connection;
@@ -171,17 +275,10 @@ router.delete('/categories/:id', async (req, res) => {
   }
 });
 
-// GET /api/age-groups - Returns all age groups
-router.get('/age-groups', async (req, res) => {
-  const { category_id, age_group_id } = req.query;
+// GET /api/files/download/:fileId - Handles file downloads
+router.get('/download/:fileId', async (req, res) => {
+  const { fileId } = req.params;
   const { cdc_id: userCdcId } = req.user;
-
-  if (!category_id || !age_group_id) {
-    return res.status(400).json({
-      success: false,
-      message: 'Both category_id and age_group_id are required'
-    });
-  }
 
   let connection;
   try {
@@ -195,29 +292,39 @@ router.get('/age-groups', async (req, res) => {
     }
 
     const query = `
-      SELECT f.* 
+      SELECT f.file_name, f.file_type, f.file_data 
       FROM files f
       JOIN users u ON f.id = u.id
-      WHERE f.category_id = ? AND f.age_group_id = ? AND u.cdc_id = ?
+      WHERE f.file_id = ? AND u.cdc_id = ?
     `;
-    const params = [category_id, age_group_id, userCdcId];
+    const params = [fileId, userCdcId];
 
     const [results] = await connection.query(query, params);
 
-    return res.json({
-      success: true,
-      files: results
-    });
+    if (results.length === 0) {
+      return res.status(404).json({ 
+        success: false, 
+        message: 'File not found or not authorized' 
+      });
+    }
+
+    const file = results[0];
+    
+    res.setHeader('Content-Type', file.file_type);
+    res.setHeader('Content-Disposition', `attachment; filename="${file.file_name}"`);
+    res.send(file.file_data);
   } catch (err) {
     console.error('Database query error:', err);
     return res.status(500).json({ 
       success: false, 
-      message: 'Failed to fetch files' 
+      message: 'Failed to download file' 
     });
   } finally {
     if (connection) connection.release();
   }
 });
+
+// --- Generic Routes Last ---
 
 // POST /api/files - Handles file uploads
 router.post('/', upload.single('file_data'), async (req, res) => {
@@ -375,104 +482,28 @@ router.delete('/:id', async (req, res) => {
   }
 });
 
-
-// GET /api/files/download/:fileId - Handles file downloads
-router.get('/download/:fileId', async (req, res) => {
-  const { fileId } = req.params;
+// GET /api/files - This must be the last GET route
+router.get('/', async (req, res) => {
   const { cdc_id: userCdcId } = req.user;
-
   let connection;
+
+  if (!userCdcId) {
+    return res.status(403).json({ success: false, message: 'User is not associated with a CDC. Access denied.' });
+  }
+
   try {
     connection = await db.promisePool.getConnection();
-
-    if (!userCdcId) {
-      return res.status(403).json({
-        success: false,
-        message: 'User is not associated with a CDC. Access denied.'
-      });
-    }
-
-    const query = `
-      SELECT f.file_name, f.file_type, f.file_data 
-      FROM files f
-      JOIN users u ON f.id = u.id
-      WHERE f.file_id = ? AND u.cdc_id = ?
-    `;
-    const params = [fileId, userCdcId];
-
-    const [results] = await connection.query(query, params);
-
-    if (results.length === 0) {
-      return res.status(404).json({ 
-        success: false, 
-        message: 'File not found or not authorized' 
-      });
-    }
-
-    const file = results[0];
+    const [results] = await connection.query('SELECT * FROM files WHERE cdc_id = ?', [userCdcId]);
     
-    res.setHeader('Content-Type', file.file_type);
-    res.setHeader('Content-Disposition', `attachment; filename="${file.file_name}"`);
-    res.send(file.file_data);
-  } catch (err) {
-    console.error('Database query error:', err);
-    return res.status(500).json({ 
-      success: false, 
-      message: 'Failed to download file' 
-    });
-  } finally {
-    if (connection) connection.release();
-  }
-});
-
-// GET /api/files/counts - Returns file counts per category for a specific age group
-router.get('/counts', async (req, res) => {
-  const { age_group_id } = req.query;
-  const { cdc_id: userCdcId } = req.user;
-
-  if (!age_group_id) {
-    return res.status(400).json({
-      success: false,
-      message: 'age_group_id is required'
-    });
-  }
-
-  let connection;
-  try {
-    connection = await db.promisePool.getConnection();
-
-    if (!userCdcId) {
-      return res.status(403).json({
-        success: false,
-        message: 'User is not associated with a CDC. Access denied.'
-      });
-    }
-
-    const query = `
-      SELECT f.category_id, COUNT(*) as count 
-      FROM files f
-      JOIN users u ON f.id = u.id
-      WHERE f.age_group_id = ? AND u.cdc_id = ?
-      GROUP BY f.category_id
-    `;
-    const params = [age_group_id, userCdcId];
-
-    const [results] = await connection.query(query, params);
-
-    const counts = {};
-    results.forEach(row => {
-      counts[row.category_id] = row.count;
-    });
-
     return res.json({
       success: true,
-      counts
+      files: results
     });
   } catch (err) {
     console.error('Database query error:', err);
     return res.status(500).json({ 
       success: false, 
-      message: 'Failed to fetch file counts' 
+      message: 'Failed to fetch files' 
     });
   } finally {
     if (connection) connection.release();
