@@ -77,56 +77,36 @@ router.get('/counts', async (req, res) => {
   }
 });
 
-// GET /api/files/age-groups - Returns all age groups
-router.get('/age-groups', async (req, res) => {
-  const { category_id, age_group_id } = req.query;
-  const { cdc_id: userCdcId } = req.user;
-
-  if (!category_id || !age_group_id) {
-    return res.status(400).json({
-      success: false,
-      message: 'Both category_id and age_group_id are required'
-    });
-  }
-
+// GET /api/files/get-age-groups - Returns all age groups
+router.get('/get-age-groups', async (req, res) => {
   let connection;
   try {
     connection = await db.promisePool.getConnection();
-
-    if (!userCdcId) {
-      return res.status(403).json({
-        success: false,
-        message: 'User is not associated with a CDC. Access denied.'
-      });
-    }
-
-    const query = `
-      SELECT f.* 
-      FROM files f
-      JOIN users u ON f.id = u.id
-      WHERE f.category_id = ? AND f.age_group_id = ? AND u.cdc_id = ?
-    `;
-    const params = [category_id, age_group_id, userCdcId];
-
-    const [results] = await connection.query(query, params);
-
+    const [results] = await connection.query('SELECT * FROM age_groups');
+    
+    // Format the age ranges properly
+    const formattedResults = results.map(group => ({
+      ...group,
+      age_range: group.age_range.replace(/\?/g, '-')
+    }));
+    
     return res.json({
       success: true,
-      files: results
+      ageGroups: formattedResults
     });
   } catch (err) {
     console.error('Database query error:', err);
     return res.status(500).json({ 
       success: false, 
-      message: 'Failed to fetch files' 
+      message: 'Failed to fetch age groups' 
     });
   } finally {
     if (connection) connection.release();
   }
 });
 
-// GET /api/files/categories - Returns all categories for the user's CDC
-router.get('/categories', async (req, res) => {
+// GET /api/files/get-categories - Returns all categories for the user's CDC
+router.get('/get-categories', async (req, res) => {
   const { cdc_id: userCdcId } = req.user;
   let connection;
 
