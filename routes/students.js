@@ -4,25 +4,7 @@ const db = require('../db');
 const jwt = require('jsonwebtoken');
 
 // Middleware to get CDC ID from JWT
-const getPresidentCdcId = async (req) => {
-  const token = req.headers.authorization?.split(' ')[1];
-  if (!token) throw new Error('Unauthorized');
-
-  const decoded = jwt.verify(token, process.env.JWT_SECRET);
-  const loggedInUserId = decoded.id;
-
-  const connection = await db.promisePool.getConnection();
-  try {
-    const [currentUser] = await connection.query(
-      'SELECT cdc_id FROM users WHERE id = ? AND type = ?', 
-      [loggedInUserId, 'president']
-    );
-    if (!currentUser.length) throw new Error('President not found');
-    return currentUser[0].cdc_id;
-  } finally {
-    connection.release();
-  }
-};
+const authenticate = require('../authMiddleware');
 
 // Base student query with CDC filtering
 router.get('/', async (req, res) => {
@@ -30,7 +12,15 @@ router.get('/', async (req, res) => {
   let connection;
   
   try {
-    const cdcId = await getPresidentCdcId(req);
+    // Use the cdc_id from the authenticated user
+    const cdcId = req.user.cdc_id;
+    if (!cdcId) {
+      return res.status(403).json({
+        success: false,
+        message: 'Access denied. User is not associated with a CDC.',
+      });
+    }
+
     connection = await db.promisePool.getConnection();
 
     let query = `

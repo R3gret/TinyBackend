@@ -40,7 +40,7 @@ const authenticate = require('./routes/authMiddleware');
 
 // API routes - Explicit mounting (recommended approach)
 app.use('/api/login', require('./routes/login'));
-app.use('/api/students', require('./routes/students'));
+app.use('/api/students', authenticate, require('./routes/students'));
 app.use('/api/register', require('./routes/register'));
 app.use('/api/add_activity', authenticate, require('./routes/add_activity'));
 app.use('/api/get_activities', authenticate, require('./routes/get_activities'));
