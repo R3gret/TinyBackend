@@ -76,7 +76,6 @@ router.post('/', [
 });
 
 // Bulk insert attendance records
-// In your backend attendance route file
 router.post('/bulk', [
   body().isArray(),
   body('*.student_id').isInt(),
@@ -88,42 +87,52 @@ router.post('/bulk', [
     return res.status(400).json({ success: false, errors: errors.array() });
   }
 
-  const attendanceRecords = req.body; // Directly use the array
+  const attendanceRecords = req.body;
   let connection;
 
   try {
     connection = await db.promisePool.getConnection();
 
-    // Validate students exist
     const studentIds = attendanceRecords.map(r => r.student_id);
+    if (studentIds.length === 0) {
+      return res.status(400).json({
+        success: false,
+        message: 'No attendance records provided'
+      });
+    }
+    
     const [students] = await connection.query(
       'SELECT student_id FROM students WHERE student_id IN (?)',
       [studentIds]
     );
 
-    if (students.length !== new Set(studentIds).size) {
+    const foundStudentIds = new Set(students.map(s => s.student_id));
+    const allStudentsFound = studentIds.every(id => foundStudentIds.has(id));
+
+    if (!allStudentsFound) {
       return res.status(404).json({
         success: false,
         message: 'One or more students not found'
       });
     }
 
-    // Insert records
     const values = attendanceRecords.map(r => [
       r.student_id,
       r.attendance_date,
       r.status
     ]);
 
+    // Use ON DUPLICATE KEY UPDATE to either insert or update records
     const [result] = await connection.query(
-      'INSERT INTO attendance (student_id, attendance_date, status) VALUES ?',
+      `INSERT INTO attendance (student_id, attendance_date, status) VALUES ?
+       ON DUPLICATE KEY UPDATE status = VALUES(status)`,
       [values]
     );
 
     res.status(201).json({
       success: true,
-      insertedCount: result.affectedRows,
-      message: 'Attendance records created successfully'
+      affectedRows: result.affectedRows,
+      message: 'Attendance records created or updated successfully'
     });
 
   } catch (err) {
