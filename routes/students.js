@@ -7,7 +7,7 @@ const jwt = require('jsonwebtoken');
 const authenticate = require('../authMiddleware');
 
 // Base student query with CDC filtering
-router.get('/', async (req, res) => {
+router.get('/', authenticate, async (req, res) => {
   const { ageFilter } = req.query;
   let connection;
   
