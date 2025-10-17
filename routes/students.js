@@ -4,7 +4,7 @@ const db = require('../db');
 const jwt = require('jsonwebtoken');
 
 // Middleware to get CDC ID from JWT
-const authenticate = require('../authMiddleware');
+const authenticate = require('./authMiddleware');
 
 // Base student query with CDC filtering
 router.get('/', authenticate, async (req, res) => {
