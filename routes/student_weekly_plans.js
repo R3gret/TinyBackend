@@ -3,7 +3,7 @@ const router = express.Router();
 const db = require('../db');
 const authenticate = require('./authMiddleware');
 
-// Create a new student weekly plan with activities
+// Create or update a student weekly plan with activities
 router.post('/', authenticate, async (req, res) => {
     const { plan_date, activities } = req.body;
     const cdcId = req.user.cdc_id;
@@ -16,31 +16,54 @@ router.post('/', authenticate, async (req, res) => {
     try {
         await connection.beginTransaction();
 
-        // Insert into student_weekly_plans
-        const [planResult] = await connection.query(
-            'INSERT INTO student_weekly_plans (plan_date, cdc_id) VALUES (?, ?)',
+        // Check if a plan for this date and cdc already exists
+        const [existingPlan] = await connection.query(
+            'SELECT student_plan_id FROM student_weekly_plans WHERE plan_date = ? AND cdc_id = ?',
             [plan_date, cdcId]
         );
-        const student_plan_id = planResult.insertId;
 
+        let student_plan_id;
+        let message = '';
+
+        if (existingPlan.length > 0) {
+            // Plan exists, so we update it
+            student_plan_id = existingPlan[0].student_plan_id;
+            message = 'Student weekly plan updated successfully.';
+
+            // Delete old activities for this plan
+            await connection.query('DELETE FROM student_scheduled_activities WHERE student_plan_id = ?', [student_plan_id]);
+
+        } else {
+            // Plan does not exist, create a new one
+            const [planResult] = await connection.query(
+                'INSERT INTO student_weekly_plans (plan_date, cdc_id) VALUES (?, ?)',
+                [plan_date, cdcId]
+            );
+            student_plan_id = planResult.insertId;
+            message = 'Student weekly plan created successfully.';
+        }
+
+        let insertedCount = 0;
         // Insert into student_scheduled_activities
         if (activities.length > 0) {
             const activityValues = activities.map(act => [student_plan_id, act.activity_name, act.start_time, act.end_time]);
-            await connection.query(
+            const [insertResult] = await connection.query(
                 'INSERT INTO student_scheduled_activities (student_plan_id, activity_name, start_time, end_time) VALUES ?',
                 [activityValues]
             );
+            insertedCount = insertResult.affectedRows;
         }
 
         await connection.commit();
         res.status(201).json({
             success: true,
-            message: 'Student weekly plan created successfully.',
-            student_plan_id
+            message: message,
+            student_plan_id,
+            insertedCount: insertedCount
         });
     } catch (error) {
         await connection.rollback();
-        console.error('Error creating student weekly plan:', error);
+        console.error('Error creating/updating student weekly plan:', error);
         res.status(500).json({ success: false, message: 'Server error.' });
     } finally {
         connection.release();
