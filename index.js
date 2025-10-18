@@ -43,8 +43,6 @@ app.use('/api/login', require('./routes/login'));
 app.use('/api/students', authenticate, require('./routes/students'));
 app.use('/api/register', require('./routes/register'));
 app.use('/api/add_activity', authenticate, require('./routes/add_activity'));
-app.use('/api/get_activities', authenticate, require('./routes/get_activities'));
-app.use('/api/get_scheduled_dates', authenticate, require('./routes/get_scheduled_dates'));
 app.use('/api/attendance', require('./routes/attendance'));
 app.use('/api/users', require('./routes/users'));
 app.use('/api/account', require('./routes/account')); // This will properly mount account routes
@@ -61,6 +59,7 @@ app.use('/api/dom', require('./routes/domainstud'));
 app.use('/api/submissions', require('./routes/submissions'));
 app.use('/api/parent-announcements', require('./routes/parentannouncements'));
 app.use('/api/workers', authenticate, require('./routes/workers')); // Use the new worker routes
+app.use('/api/student-plans', require('./routes/student_weekly_plans'));
 
 // Static files
 app.use('/uploads/announcements', express.static(path.join(__dirname, 'uploads/announcements')));
