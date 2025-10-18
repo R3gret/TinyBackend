@@ -60,6 +60,7 @@ app.use('/api/submissions', require('./routes/submissions'));
 app.use('/api/parent-announcements', require('./routes/parentannouncements'));
 app.use('/api/workers', authenticate, require('./routes/workers')); // Use the new worker routes
 app.use('/api/student-plans', require('./routes/student_weekly_plans'));
+app.use('/api/get_activities', authenticate, require('./routes/get_activities'));
 
 // Static files
 app.use('/uploads/announcements', express.static(path.join(__dirname, 'uploads/announcements')));
