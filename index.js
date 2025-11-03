@@ -50,6 +50,7 @@ app.use('/api/user_session', require('./routes/user_session'));
 app.use('/api/domains', require('./routes/domains'));
 app.use('/api/files', authenticate, require('./routes/fileRoutes'));
 app.use('/api/announcements', authenticate, require('./routes/announcement'));
+app.use('/api/presidents', require('./routes/presidents'));
 app.use('/api/cdc', require('./routes/insert_cdc'));
 app.use('/api/parent', require('./routes/parent'));
 app.use('/api/admin-parent-list', require('./routes/adminparentlist'));

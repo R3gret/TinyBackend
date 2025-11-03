@@ -1,8 +1,9 @@
 const express = require('express');
 const router = express.Router();
 const db = require('../db');
+const authenticate = require('./authMiddleware');
 
-router.post('/', async (req, res) => {
+router.post('/', authenticate, async (req, res) => {
   const {
     childFirstName, childLastName, childMiddleName, childGender, childAddress, childBirthday,
     childFirstLanguage, childSecondLanguage,
@@ -12,7 +13,7 @@ router.post('/', async (req, res) => {
     emergencyName, emergencyRelationship, emergencyContactHome, emergencyContactWork
   } = req.body;
 
-  console.log("Received data:", req.body);
+  
 
   if (!childFirstName || !childLastName || !guardianName || !motherName || !fatherName) {
     return res.status(400).json({ success: false, message: 'Required fields are missing.' });
@@ -20,24 +21,28 @@ router.post('/', async (req, res) => {
 
   let connection;
   try {
+    const { cdc_id } = req.user;
+    const enrolled_at = new Date();
     connection = await db.promisePool.getConnection();
     await connection.beginTransaction();
 
     // Step 1: Insert into students
     const studentQuery = `INSERT INTO students 
-      (first_name, middle_name, last_name, birthdate, gender) 
-      VALUES (?, ?, ?, ?, ?)`;
+      (first_name, middle_name, last_name, birthdate, gender, cdc_id, enrolled_at) 
+      VALUES (?, ?, ?, ?, ?, ?, ?)`;
     
     const [studentResults] = await connection.query(studentQuery, [
       childFirstName, 
       childMiddleName, 
       childLastName, 
       childBirthday, 
-      childGender
+      childGender,
+      cdc_id,
+      enrolled_at
     ]);
 
     const studentId = studentResults.insertId;
-    console.log(`Inserted student ID: ${studentId}`);
+    
 
     // Step 2: Insert into child_other_info
     const childInfoQuery = `INSERT INTO child_other_info 
@@ -105,7 +110,7 @@ router.post('/', async (req, res) => {
     ]);
 
     await connection.commit();
-    console.log('All data inserted for student ID:', studentId);
+    console.log('All data inserted for student ID');
     return res.json({ success: true, message: 'Registration successful', studentId });
 
   } catch (err) {
