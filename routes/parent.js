@@ -13,6 +13,8 @@ router.get('/guardians', authenticate, async (req, res) => {
     const loggedInUserId = req.user.id;
     const cdcId = req.user.cdc_id;
 
+    connection = await db.promisePool.getConnection();
+
     // Get all guardians with their associated student info
     const [results] = await connection.query(`
       SELECT 
