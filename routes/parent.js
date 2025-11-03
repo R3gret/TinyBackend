@@ -71,7 +71,8 @@ router.get('/', authenticate, async (req, res) => {
     try {
       const loggedInUserId = req.user.id;
       const cdcId = req.user.cdc_id;
-  
+
+      connection = await db.promisePool.getConnection();
       const [results] = await connection.query(
         'SELECT id, username, type, cdc_id FROM users WHERE username LIKE ? AND type = ? AND cdc_id = ?',
         [`%${query}%`, 'parent', cdcId]
