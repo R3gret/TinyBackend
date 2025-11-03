@@ -3,34 +3,15 @@ const express = require('express');
 const router = express.Router();
 const db = require('../db');
 const jwt = require('jsonwebtoken');
+const authenticate = require('./authMiddleware');
 
 // Get all guardians for the current CDC
 // Get all guardians for the current CDC
-router.get('/guardians', async (req, res) => {
+router.get('/guardians', authenticate, async (req, res) => {
   let connection;
   try {
-    // Get creator's CDC ID from JWT
-    const token = req.headers.authorization?.split(' ')[1];
-    if (!token) {
-      return res.status(401).json({ error: 'Unauthorized - No token provided' });
-    }
-
-    const decoded = jwt.verify(token, process.env.JWT_SECRET);
-    const loggedInUserId = decoded.id;
-
-    connection = await db.promisePool.getConnection();
-    
-    // Get creator's CDC ID
-    const [creator] = await connection.query(
-      'SELECT cdc_id FROM users WHERE id = ?', 
-      [loggedInUserId]
-    );
-    
-    if (!creator.length) {
-      return res.status(404).json({ error: 'User not found' });
-    }
-    
-    const cdcId = creator[0].cdc_id;
+    const loggedInUserId = req.user.id;
+    const cdcId = req.user.cdc_id;
 
     // Get all guardians with their associated student info
     const [results] = await connection.query(`
@@ -62,29 +43,11 @@ router.get('/guardians', async (req, res) => {
 
 // Get all parent accounts
 // Get all parent accounts for the current CDC
-router.get('/', async (req, res) => {
+router.get('/', authenticate, async (req, res) => {
     let connection;
     try {
-      // Get creator's CDC ID from JWT
-      const token = req.headers.authorization?.split(' ')[1];
-      if (!token) throw new Error('Unauthorized');
-  
-      const decoded = jwt.verify(token, process.env.JWT_SECRET);
-      const loggedInUserId = decoded.id;
-  
-      connection = await db.promisePool.getConnection();
-      
-      // Get creator's CDC ID
-      const [creator] = await connection.query(
-        'SELECT cdc_id FROM users WHERE id = ?', 
-        [loggedInUserId]
-      );
-      
-      if (!creator.length) {
-        return res.status(404).json({ error: 'User not found' });
-      }
-      
-      const cdcId = creator[0].cdc_id;
+      const loggedInUserId = req.user.id;
+      const cdcId = req.user.cdc_id;
   
       const [results] = await connection.query(
         'SELECT id, username, type, cdc_id FROM users WHERE type = ? AND cdc_id = ?', 
@@ -100,30 +63,12 @@ router.get('/', async (req, res) => {
   });
   
   // Search parent accounts for the current CDC
-  router.get('/search', async (req, res) => {
+  router.get('/search', authenticate, async (req, res) => {
     const { query } = req.query;
     let connection;
     try {
-      // Get creator's CDC ID from JWT
-      const token = req.headers.authorization?.split(' ')[1];
-      if (!token) throw new Error('Unauthorized');
-  
-      const decoded = jwt.verify(token, process.env.JWT_SECRET);
-      const loggedInUserId = decoded.id;
-  
-      connection = await db.promisePool.getConnection();
-      
-      // Get creator's CDC ID
-      const [creator] = await connection.query(
-        'SELECT cdc_id FROM users WHERE id = ?', 
-        [loggedInUserId]
-      );
-      
-      if (!creator.length) {
-        return res.status(404).json({ error: 'User not found' });
-      }
-      
-      const cdcId = creator[0].cdc_id;
+      const loggedInUserId = req.user.id;
+      const cdcId = req.user.cdc_id;
   
       const [results] = await connection.query(
         'SELECT id, username, type, cdc_id FROM users WHERE username LIKE ? AND type = ? AND cdc_id = ?',
@@ -139,7 +84,7 @@ router.get('/', async (req, res) => {
   });
 
 // Create parent account (locked to parent type with creator's CDC ID)
-router.post('/', async (req, res) => {
+router.post('/', authenticate, async (req, res) => {
   const { username, password, student_id } = req.body; // Add student_id to destructuring
   let connection;
 
@@ -153,12 +98,8 @@ router.post('/', async (req, res) => {
   }
 
   try {
-    // Get creator's CDC ID from JWT
-    const token = req.headers.authorization?.split(' ')[1];
-    if (!token) throw new Error('Unauthorized');
-
-    const decoded = jwt.verify(token, process.env.JWT_SECRET);
-    const loggedInUserId = decoded.id;
+    const loggedInUserId = req.user.id;
+    const cdcId = req.user.cdc_id;
 
     connection = await db.promisePool.getConnection();
     
@@ -166,17 +107,6 @@ router.post('/', async (req, res) => {
     await connection.beginTransaction();
     
     try {
-      // Get creator's CDC ID
-      const [creator] = await connection.query(
-        'SELECT cdc_id FROM users WHERE id = ?', 
-        [loggedInUserId]
-      );
-      
-      if (!creator.length) {
-        throw new Error('User not found');
-      }
-      
-      const cdcId = creator[0].cdc_id;
 
       // Check if username exists
       const [existingUsers] = await connection.query(
@@ -231,7 +161,7 @@ router.post('/', async (req, res) => {
 });
 
 // Get user password (Note: This should be secured in production)
-router.get('/:id/password', async (req, res) => {
+router.get('/:id/password', authenticate, async (req, res) => {
   const { id } = req.params;
   let connection;
   
@@ -256,7 +186,7 @@ router.get('/:id/password', async (req, res) => {
 });
 
 // Save additional user info
-router.post('/user-info', async (req, res) => {
+router.post('/user-info', authenticate, async (req, res) => {
   const {
     user_id,
     full_name,
@@ -287,7 +217,7 @@ router.post('/user-info', async (req, res) => {
 });
 
 // Delete user account
-router.delete('/:id', async (req, res) => {
+router.delete('/:id', authenticate, async (req, res) => {
   const { id } = req.params;
   let connection;
 
@@ -312,7 +242,7 @@ router.delete('/:id', async (req, res) => {
 });
 
 // Edit user account
-router.put('/:id', async (req, res) => {
+router.put('/:id', authenticate, async (req, res) => {
   const { id } = req.params;
   const { username, password, type } = req.body;
   let connection;
