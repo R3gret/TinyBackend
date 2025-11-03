@@ -140,7 +140,7 @@ router.get('/', async (req, res) => {
 
 // Create parent account (locked to parent type with creator's CDC ID)
 router.post('/', async (req, res) => {
-  const { username, password, guardianId } = req.body; // Add guardianId to destructuring
+  const { username, password, student_id } = req.body; // Add student_id to destructuring
   let connection;
 
   // Validation
@@ -199,11 +199,11 @@ router.post('/', async (req, res) => {
 
       const newUserId = result.insertId;
 
-      // If guardianId was provided, update the guardian_info record
-      if (guardianId) {
+      // If student_id was provided, update the guardian_info record
+      if (student_id) {
         await connection.query(
-          'UPDATE guardian_info SET id = ? WHERE guardian_id = ?',
-          [newUserId, guardianId]
+          'UPDATE guardian_info SET id = ? WHERE student_id = ?',
+          [newUserId, student_id]
         );
       }
 
