@@ -24,17 +24,17 @@ const upload = multer({ storage });
 
 // POST /api/announcements - Create new announcement (protected)
 router.post('/', upload.single('attachment'), async (req, res) => {
-  const { title, message, ageFilter } = req.body;
+  const { title, message, ageFilter, roleFilter } = req.body;
   const file = req.file;
   const user = req.user; // User data from the standardized 'authenticate' middleware
   let connection;
 
-  if (!title || !message || !ageFilter) {
+  if (!title || !message || !ageFilter || !roleFilter) {
     // Clean up uploaded file if validation fails
     if (file) fs.unlinkSync(file.path);
     return res.status(400).json({ 
       success: false, 
-      message: 'Title, message and age filter are required' 
+      message: 'Title, message, age filter, and role filter are required' 
     });
   }
 
@@ -58,8 +58,9 @@ router.post('/', upload.single('attachment'), async (req, res) => {
         age_filter, 
         attachment_path, 
         attachment_name,
-        cdc_id
-      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+        cdc_id,
+        role_filter
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
       [
         title,
         message,
@@ -68,7 +69,8 @@ router.post('/', upload.single('attachment'), async (req, res) => {
         ageFilter,
         file ? file.path : null,
         file ? file.originalname : null,
-        user.cdc_id
+        user.cdc_id,
+        roleFilter
       ]
     );
 
