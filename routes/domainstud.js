@@ -1,36 +1,20 @@
 const express = require('express');
 const router = express.Router();
 const db = require('../db');
-const jwt = require('jsonwebtoken');
+const authenticate = require('./authMiddleware');
 
-// Middleware to get CDC ID from JWT (same as working endpoint)
-const getPresidentCdcId = async (req) => {
-  const token = req.headers.authorization?.split(' ')[1];
-  if (!token) throw new Error('Unauthorized');
-
-  const decoded = jwt.verify(token, process.env.JWT_SECRET);
-  const loggedInUserId = decoded.id;
-
-  const connection = await db.promisePool.getConnection();
-  try {
-    const [currentUser] = await connection.query(
-      'SELECT cdc_id FROM users WHERE id = ? AND type = ?', 
-      [loggedInUserId, 'worker']
-    );
-    if (!currentUser.length) throw new Error('President not found');
-    return currentUser[0].cdc_id;
-  } finally {
-    connection.release();
-  }
-};
-
-// Updated endpoint at /api/att
-router.get('/att', async (req, res) => {
+// Updated endpoint at /api/att, now using authMiddleware
+router.get('/att', authenticate, async (req, res) => {
   const { ageFilter } = req.query;
+  const { cdc_id, type } = req.user;
   let connection;
+
+  // Ensure the user is a 'worker'
+  if (type !== 'worker') {
+    return res.status(403).json({ success: false, message: 'Access denied: User is not a worker.' });
+  }
   
   try {
-    const cdcId = await getPresidentCdcId(req);
     connection = await db.promisePool.getConnection();
 
     let query = `
@@ -38,7 +22,7 @@ router.get('/att', async (req, res) => {
       FROM students
       WHERE cdc_id = ?
     `;
-    const params = [cdcId];
+    const params = [cdc_id];
     
     if (ageFilter) {
       const today = new Date();
@@ -101,12 +85,6 @@ router.get('/att', async (req, res) => {
     });
   } catch (err) {
     console.error('Error:', err);
-    if (err.message === 'Unauthorized' || err.name === 'JsonWebTokenError') {
-      return res.status(401).json({ success: false, message: 'Unauthorized' });
-    }
-    if (err.message === 'CDWorker not found') {
-      return res.status(403).json({ success: false, message: 'Access denied' });
-    }
     return res.status(500).json({ 
       success: false, 
       message: 'Database error' 
