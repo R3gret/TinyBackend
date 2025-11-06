@@ -344,7 +344,7 @@ router.get('/info', authenticate, async (req, res) => {
 });
 
 // Update guardian_info for the logged-in parent
-router.put('/info', authenticate, async (req, res) => {
+router.put('/info/update', authenticate, async (req, res) => {
   const { guardian_name, relationship, email_address, phone_num, address } = req.body;
   const parentUserId = req.user.id;
   let connection;
