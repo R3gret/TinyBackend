@@ -343,6 +343,38 @@ router.get('/info', authenticate, async (req, res) => {
   }
 });
 
+// Update guardian_info for the logged-in parent
+router.put('/info', authenticate, async (req, res) => {
+  const { guardian_name, relationship, email_address, phone_num, address } = req.body;
+  const parentUserId = req.user.id;
+  let connection;
+
+  // Basic validation
+  if (!guardian_name || !relationship || !email_address) {
+      return res.status(400).json({ error: 'Guardian name, relationship, and email are required.' });
+  }
+
+  try {
+    connection = await db.promisePool.getConnection();
+
+    const [result] = await connection.query(
+      'UPDATE guardian_info SET guardian_name = ?, relationship = ?, email_address = ?, phone_num = ?, address = ? WHERE id = ?',
+      [guardian_name, relationship, email_address, phone_num, address, parentUserId]
+    );
+
+    if (result.affectedRows === 0) {
+      return res.status(404).json({ error: 'Guardian information not found for this user, nothing updated.' });
+    }
+
+    res.json({ success: true, message: 'Guardian information updated successfully.' });
+  } catch (err) {
+    console.error('Database error:', err);
+    res.status(500).json({ error: 'Failed to update guardian information.' });
+  } finally {
+    if (connection) connection.release();
+  }
+});
+
 // Get student_id for the logged-in parent
 router.get('/student', authenticate, async (req, res) => {
   let connection;
