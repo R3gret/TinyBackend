@@ -9,9 +9,9 @@ router.get('/att', authenticate, async (req, res) => {
   const { cdc_id, type } = req.user;
   let connection;
 
-  // Ensure the user is a 'worker'
-  if (type !== 'worker') {
-    return res.status(403).json({ success: false, message: 'Access denied: User is not a worker.' });
+  // Ensure the user is a 'worker' or 'parent'
+  if (type !== 'worker' && type !== 'parent') {
+    return res.status(403).json({ success: false, message: 'Access denied: User must be a worker or parent.' });
   }
   
   try {
