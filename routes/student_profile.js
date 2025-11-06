@@ -45,7 +45,7 @@ router.put('/:student_id', authenticate, async (req, res) => {
     const {
         first_name, middle_name, last_name, birthdate, gender,
         child_address, first_language, second_language,
-        guardian_name, relationship, email_address,
+        guardian_name, relationship, email_address, phone_num, address,
         mother_name, mother_occupation, mother_address, mother_home_contact, mother_work_contact,
         father_name, father_occupation, father_address, father_home_contact, father_work_contact,
         emergency_name, emergency_relationship, emergency_home_contact, emergency_work_contact
@@ -70,8 +70,8 @@ router.put('/:student_id', authenticate, async (req, res) => {
 
         // Update guardian_info table
         await connection.query(
-            'UPDATE guardian_info SET guardian_name = ?, relationship = ?, email_address = ? WHERE student_id = ?',
-            [guardian_name, relationship, email_address, student_id]
+            'UPDATE guardian_info SET guardian_name = ?, relationship = ?, email_address = ?, phone_num = ?, address = ? WHERE student_id = ?',
+            [guardian_name, relationship, email_address, phone_num, address, student_id]
         );
 
         // Update mother_info table

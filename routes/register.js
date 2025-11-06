@@ -7,7 +7,7 @@ router.post('/', authenticate, async (req, res) => {
   const {
     childFirstName, childLastName, childMiddleName, childGender, childAddress, childBirthday,
     childFirstLanguage, childSecondLanguage,
-    guardianName, guardianRelationship, guardianEmail,
+    guardianName, guardianRelationship, guardianEmail, guardianPhone, guardianAddress,
     motherName, motherOccupation, motherAddress, motherContactHome, motherContactWork,
     fatherName, fatherOccupation, fatherAddress, fatherContactHome, fatherContactWork,
     emergencyName, emergencyRelationship, emergencyContactHome, emergencyContactWork
@@ -58,14 +58,16 @@ router.post('/', authenticate, async (req, res) => {
 
     // Step 3: Guardian info
     const guardianQuery = `INSERT INTO guardian_info 
-      (student_id, guardian_name, relationship, email_address) 
-      VALUES (?, ?, ?, ?)`;
+      (student_id, guardian_name, relationship, email_address, phone_num, address) 
+      VALUES (?, ?, ?, ?, ?, ?)`;
     
     await connection.query(guardianQuery, [
       studentId, 
       guardianName, 
       guardianRelationship, 
-      guardianEmail
+      guardianEmail,
+      guardianPhone,
+      guardianAddress
     ]);
 
     // Step 4: Mother info

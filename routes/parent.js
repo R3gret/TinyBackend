@@ -22,6 +22,8 @@ router.get('/guardians', authenticate, async (req, res) => {
         gi.guardian_name, 
         gi.relationship, 
         gi.email_address, 
+        gi.phone_num,
+        gi.address,
         gi.student_id, 
         gi.id as user_id,
         CONCAT(s.first_name, ' ', COALESCE(s.middle_name, ''), ' ', s.last_name) as student_name,
