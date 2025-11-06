@@ -315,6 +315,32 @@ router.put('/:id', authenticate, async (req, res) => {
   }
 });
 
+// Get guardian_info for the logged-in parent
+router.get('/info', authenticate, async (req, res) => {
+  let connection;
+  try {
+    const parentUserId = req.user.id;
+
+    connection = await db.promisePool.getConnection();
+
+    const [results] = await connection.query(
+      'SELECT * FROM guardian_info WHERE id = ?',
+      [parentUserId]
+    );
+
+    if (results.length === 0) {
+      return res.status(404).json({ error: 'Guardian information not found for this user' });
+    }
+
+    res.json(results[0]);
+  } catch (err) {
+    console.error('Database error:', err);
+    res.status(500).json({ error: 'Failed to fetch guardian information' });
+  } finally {
+    if (connection) connection.release();
+  }
+});
+
 // Get student_id for the logged-in parent
 router.get('/student', authenticate, async (req, res) => {
   let connection;
