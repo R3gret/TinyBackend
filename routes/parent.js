@@ -315,5 +315,30 @@ router.put('/:id', authenticate, async (req, res) => {
   }
 });
 
+// Get student_id for the logged-in parent
+router.get('/student', authenticate, async (req, res) => {
+  let connection;
+  try {
+    const parentUserId = req.user.id;
+
+    connection = await db.promisePool.getConnection();
+
+    const [results] = await connection.query(
+      'SELECT student_id FROM guardian_info WHERE id = ?',
+      [parentUserId]
+    );
+
+    if (results.length === 0) {
+      return res.status(404).json({ error: 'No student linked to this parent account' });
+    }
+
+    res.json({ student_id: results[0].student_id });
+  } catch (err) {
+    console.error('Database error:', err);
+    res.status(500).json({ error: 'Failed to fetch student ID' });
+  } finally {
+    if (connection) connection.release();
+  }
+});
 
 module.exports = router;

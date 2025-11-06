@@ -17,7 +17,7 @@ const authenticate = (req, res, next) => {
     const decoded = jwt.verify(token, process.env.JWT_SECRET || 'your-secret-key');
 
     // Assign the nested user object to req.user
-    req.user = decoded.user;
+    req.user =   decoded.user;
 
     // Critical Check: Ensure req.user exists and has an ID
     if (!req.user || !req.user.id) {
