@@ -1,3 +1,10 @@
+const express = require('express');
+const router = express.Router();
+const multer = require('multer');
+const path = require('path');
+const fs = require('fs');
+const db = require('../db');
+const authenticate = require('./authMiddleware');
 
 const submissionUploadDir = path.join(__dirname, '../uploads/submissions');
 if (!fs.existsSync(submissionUploadDir)) {
