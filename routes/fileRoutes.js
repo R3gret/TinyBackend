@@ -283,7 +283,7 @@ router.get('/download/:fileId', async (req, res) => {
     }
 
     const query = `
-      SELECT f.file_name, f.file_type, f.file_data 
+      SELECT f.file_name, f.file_type, f.file_path 
       FROM files f
       JOIN users u ON f.id = u.id
       WHERE f.file_id = ? AND u.cdc_id = ?
@@ -301,9 +301,27 @@ router.get('/download/:fileId', async (req, res) => {
 
     const file = results[0];
     
-    res.setHeader('Content-Type', file.file_type);
-    res.setHeader('Content-Disposition', `attachment; filename="${file.file_name}"`);
-    res.send(file.file_data);
+    // Check if the file exists on the filesystem
+    if (!fs.existsSync(file.file_path)) {
+        return res.status(404).json({
+            success: false,
+            message: 'File not found on server.'
+        });
+    }
+
+    // Stream the file for download
+    res.download(file.file_path, file.file_name, (err) => {
+        if (err) {
+            console.error('File download error:', err);
+            // Don't try to send another response if headers are already sent
+            if (!res.headersSent) {
+                res.status(500).json({
+                    success: false,
+                    message: 'Could not download the file.'
+                });
+            }
+        }
+    });
   } catch (err) {
     console.error('Database query error:', err);
     return res.status(500).json({ 
@@ -324,7 +342,7 @@ router.post('/', upload.single('file_data'), async (req, res) => {
   const { id: userId, cdc_id: userCdcId } = req.user;
 
   if (!category_id || !age_group_id || !file_name || !file) {
-    if (file) fs.unlinkSync(file.path);
+    if (file) fs.unlinkSync(file.path); // Clean up orphaned file
     return res.status(400).json({ 
       success: false, 
       message: 'Missing required fields' 
@@ -333,13 +351,11 @@ router.post('/', upload.single('file_data'), async (req, res) => {
 
   let connection;
   try {
-    // Read the file data
-    const fileData = await fs.promises.readFile(file.path);
     connection = await db.promisePool.getConnection();
 
-    // For file uploads, the user must be associated with a CDC, even a President
+    // For file uploads, the user must be associated with a CDC
     if (!userCdcId) {
-        if (file) fs.unlinkSync(file.path);
+        fs.unlinkSync(file.path); // Clean up orphaned file
         return res.status(403).json({
             success: false,
             message: 'User must be associated with a CDC to upload files.'
@@ -348,21 +364,18 @@ router.post('/', upload.single('file_data'), async (req, res) => {
 
     const [result] = await connection.query(
       `INSERT INTO files 
-      (category_id, age_group_id, file_name, file_type, file_data, file_path, cdc_id, id) 
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+      (category_id, age_group_id, file_name, file_type, file_path, cdc_id, id) 
+      VALUES (?, ?, ?, ?, ?, ?, ?)`,
       [
         category_id, 
         age_group_id, 
         file_name, 
         file.mimetype, 
-        fileData,
         file.path,
         userCdcId,
         userId
       ]
     );
-
-    fs.unlinkSync(file.path);
 
     return res.json({
       success: true,
@@ -370,6 +383,7 @@ router.post('/', upload.single('file_data'), async (req, res) => {
       fileId: result.insertId
     });
   } catch (err) {
+    // If there's an error, delete the uploaded file
     if (file) fs.unlinkSync(file.path);
     console.error('Error processing file:', err);
     return res.status(500).json({ 
@@ -451,11 +465,14 @@ router.delete('/:id', async (req, res) => {
       [fileId, userCdcId]
     );
 
-    if (result.affectedRows > 0 && filePath) {
+    if (result.affectedRows > 0 && filePath && fs.existsSync(filePath)) {
       // Finally, delete the physical file from the server
-      if (fs.existsSync(filePath)) {
-        fs.unlinkSync(filePath);
-      }
+      fs.unlink(filePath, (err) => {
+        if (err) {
+          // Log the error but don't block the response, as the DB entry is already gone
+          console.error("Failed to delete physical file:", err);
+        }
+      });
     }
     
     await connection.commit();
