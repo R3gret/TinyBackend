@@ -57,7 +57,6 @@ app.use('/api/dash', require('./routes/studentsdash'));
 app.use('/api/att', require('./routes/studattendance'));
 app.use('/api/dom', require('./routes/domainstud'));
 app.use('/api/submissions', authenticate, require('./routes/submissions'));
-app.use('/api/homeworks', authenticate, require('./routes/homeworks'));
 app.use('/api/parent-announcements', require('./routes/parentannouncements'));
 app.use('/api/workers', authenticate, require('./routes/workers')); // Use the new worker routes
 app.use('/api/student-plans', require('./routes/student_weekly_plans'));
