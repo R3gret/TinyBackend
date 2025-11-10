@@ -46,15 +46,25 @@ router.get('/guardians', authenticate, async (req, res) => {
 });
 
 // Get all parent accounts
-// Get all parent accounts for the current CDC
+// Get all parent accounts for the current CDC, including guardian info
 router.get('/', authenticate, async (req, res) => {
     let connection;
     try {
-      const loggedInUserId = req.user.id;
       const cdcId = req.user.cdc_id;
   
+      connection = await db.promisePool.getConnection();
       const [results] = await connection.query(
-        'SELECT id, username, type, cdc_id FROM users WHERE type = ? AND cdc_id = ?', 
+        `SELECT 
+           u.id, 
+           u.username, 
+           u.type, 
+           u.cdc_id, 
+           g.guardian_name, 
+           g.relationship,
+           g.student_id
+         FROM users u
+         LEFT JOIN guardian_info g ON u.id = g.id
+         WHERE u.type = ? AND u.cdc_id = ?`, 
         ['parent', cdcId]
       );
       res.json(results);
@@ -66,18 +76,27 @@ router.get('/', authenticate, async (req, res) => {
     }
   });
   
-  // Search parent accounts for the current CDC
+  // Search parent accounts for the current CDC by guardian name
   router.get('/search', authenticate, async (req, res) => {
     const { query } = req.query;
     let connection;
     try {
-      const loggedInUserId = req.user.id;
       const cdcId = req.user.cdc_id;
 
       connection = await db.promisePool.getConnection();
       const [results] = await connection.query(
-        'SELECT id, username, type, cdc_id FROM users WHERE username LIKE ? AND type = ? AND cdc_id = ?',
-        [`%${query}%`, 'parent', cdcId]
+        `SELECT 
+           u.id, 
+           u.username, 
+           u.type, 
+           u.cdc_id, 
+           g.guardian_name, 
+           g.relationship,
+           g.student_id
+         FROM users u
+         LEFT JOIN guardian_info g ON u.id = g.id
+         WHERE u.type = ? AND u.cdc_id = ? AND g.guardian_name LIKE ?`,
+        ['parent', cdcId, `%${query}%`]
       );
       res.json(results);
     } catch (err) {
