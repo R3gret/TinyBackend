@@ -137,6 +137,92 @@ router.get('/student/:studentId', authenticate, async (req, res) => {
     }
 });
 
+// PUT /api/submissions/:submissionId - Parent edits a submission
+router.put('/:submissionId', authenticate, upload.single('submissionFile'), async (req, res) => {
+    const { submissionId } = req.params;
+    const { comments } = req.body;
+    const newFile = req.file;
+    const guardianUserId = req.user.id;
+    const userType = req.user.type;
+
+    if (userType !== 'parent') {
+        if (newFile) fs.unlinkSync(newFile.path); // Clean up if unauthorized
+        return res.status(403).json({ error: 'Only parents can edit submissions.' });
+    }
+
+    let connection;
+    try {
+        connection = await db.promisePool.getConnection();
+        await connection.beginTransaction();
+
+        // 1. Fetch the existing submission to verify ownership and get old file path
+        const [submissions] = await connection.query(
+            'SELECT file_path, submitted_by_guardian_id FROM activity_submissions WHERE submission_id = ?',
+            [submissionId]
+        );
+
+        if (submissions.length === 0) {
+            if (newFile) fs.unlinkSync(newFile.path);
+            await connection.rollback();
+            return res.status(404).json({ error: 'Submission not found.' });
+        }
+
+        const existingSubmission = submissions[0];
+
+        // 2. Verify that the logged-in parent is the owner of the submission
+        if (existingSubmission.submitted_by_guardian_id !== guardianUserId) {
+            if (newFile) fs.unlinkSync(newFile.path);
+            await connection.rollback();
+            return res.status(403).json({ error: 'You are not authorized to edit this submission.' });
+        }
+
+        // 3. Prepare the update query
+        let updateQuery = 'UPDATE activity_submissions SET';
+        const queryParams = [];
+
+        if (newFile) {
+            updateQuery += ' file_path = ?,',
+            queryParams.push(newFile.path);
+        }
+        if (comments !== undefined) {
+            updateQuery += ' comments = ?,',
+            queryParams.push(comments);
+        }
+
+        // Remove trailing comma and add WHERE clause
+        updateQuery = updateQuery.slice(0, -1) + ' WHERE submission_id = ?';
+        queryParams.push(submissionId);
+
+        // 4. Execute the update if there's anything to update
+        if (queryParams.length > 1) {
+            await connection.query(updateQuery, queryParams);
+        } else {
+            // Nothing to update
+            if (newFile) fs.unlinkSync(newFile.path); // Clean up if only file was sent but nothing else
+            await connection.rollback();
+            return res.status(400).json({ error: 'No new file or comments provided to update.' });
+        }
+
+        // 5. If a new file was uploaded, delete the old one
+        if (newFile && existingSubmission.file_path) {
+            if (fs.existsSync(existingSubmission.file_path)) {
+                fs.unlinkSync(existingSubmission.file_path);
+            }
+        }
+
+        await connection.commit();
+        res.json({ success: true, message: 'Submission updated successfully.' });
+
+    } catch (err) {
+        if (newFile) fs.unlinkSync(newFile.path); // Clean up on error
+        if (connection) await connection.rollback();
+        console.error('Database error:', err);
+        res.status(500).json({ error: 'Failed to update submission.' });
+    } finally {
+        if (connection) connection.release();
+    }
+});
+
 // DELETE /api/submissions/:submissionId - Delete a submission
 router.delete('/:submissionId', authenticate, async (req, res) => {
     const { submissionId } = req.params;
