@@ -2,8 +2,8 @@ const express = require('express');
 const router = express.Router();
 const db = require('../db');
 
-// Helper function to calculate age in years.months format
-function calculateAge(dob) {
+// Helper function to calculate total age in months
+function calculateAgeInMonths(dob) {
     const birthDate = new Date(dob);
     const today = new Date();
     let years = today.getFullYear() - birthDate.getFullYear();
@@ -12,17 +12,21 @@ function calculateAge(dob) {
         years--;
         months += 12;
     }
-    // Return age as a numeric value like 3.11 for 3 years and 11 months
-    return years + (months / 100);
+    return (years * 12) + months;
 }
 
-// Helper function to parse age range string like "3.1-4.0"
-function parseAgeRange(rangeStr) {
-    // Assuming format is "min-max years" e.g., "3.1-4.0 years" or "5.1-5.11 years"
-    const [minStr, maxStr] = rangeStr.split('?')[0].split('-');
-    const minAge = parseFloat(minStr.replace('?', '.'));
-    const maxAge = parseFloat(maxStr.replace('?', '.'));
-    return { minAge, maxAge };
+// Helper function to parse age range string (e.g., "3.1?4.0" or "5.1?5.11") into a month range
+function parseAgeRangeToMonths(rangeStr) {
+    const cleanRange = rangeStr.split(' ')[0]; // Remove " years"
+    const [minStr, maxStr] = cleanRange.split('?'); // Use '?' as the separator
+
+    const [minYears, minMonths] = minStr.split('.').map(Number);
+    const totalMinMonths = (minYears * 12) + (minMonths || 0);
+
+    const [maxYears, maxMonths] = maxStr.split('.').map(Number);
+    const totalMaxMonths = (maxYears * 12) + (maxMonths || 0);
+
+    return { minMonths: totalMinMonths, maxMonths: totalMaxMonths };
 }
 
 
@@ -60,8 +64,8 @@ router.get('/', async (req, res) => {
         }
         const { date_of_birth, cdc_id } = studentDetails[0];
 
-        // 3. Calculate student's age
-        const studentAge = calculateAge(date_of_birth);
+        // 3. Calculate student's age in months
+        const studentAgeInMonths = calculateAgeInMonths(date_of_birth);
 
         // 4. Get all age groups
         const [ageGroups] = await connection.query('SELECT age_group_id, age_range FROM age_groups');
@@ -70,10 +74,14 @@ router.get('/', async (req, res) => {
         let targetAgeGroupId = null;
         for (const group of ageGroups) {
             if (group.age_range) {
-                const { minAge, maxAge } = parseAgeRange(group.age_range);
-                if (studentAge >= minAge && studentAge <= maxAge) {
-                    targetAgeGroupId = group.age_group_id;
-                    break;
+                try {
+                    const { minMonths, maxMonths } = parseAgeRangeToMonths(group.age_range);
+                    if (studentAgeInMonths >= minMonths && studentAgeInMonths <= maxMonths) {
+                        targetAgeGroupId = group.age_group_id;
+                        break;
+                    }
+                } catch (e) {
+                    console.error(`Could not parse age range: "${group.age_range}"`, e);
                 }
             }
         }
