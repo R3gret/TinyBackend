@@ -84,7 +84,22 @@ router.get('/activity/:activityId', authenticate, async (req, res) => {
             return res.status(403).json({ error: 'You are not authorized to view submissions for this activity.' });
         }
         const [submissions] = await connection.query(
-            'SELECT * FROM activity_submissions WHERE activity_id = ? ORDER BY submission_date DESC',
+            `SELECT 
+                s.submission_id,
+                s.activity_id,
+                s.student_id,
+                s.file_path,
+                s.comments,
+                s.submission_date,
+                s.submitted_by_guardian_id,
+                u.username AS parent_name,
+                st.first_name AS student_first_name,
+                st.last_name AS student_last_name
+             FROM activity_submissions s
+             LEFT JOIN users u ON s.submitted_by_guardian_id = u.id
+             LEFT JOIN students st ON s.student_id = st.student_id
+             WHERE s.activity_id = ?
+             ORDER BY s.submission_date DESC`,
             [activityId]
         );
         res.json(submissions);
