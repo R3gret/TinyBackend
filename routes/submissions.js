@@ -183,6 +183,50 @@ router.get('/mine/:activityId', authenticate, async (req, res) => {
     }
 });
 
+// GET /api/submissions/exists/:activityId - Check if a submission exists for an activity
+router.get('/exists/:activityId', authenticate, async (req, res) => {
+    const { activityId } = req.params;
+    const guardianUserId = req.user.id;
+    const userType = req.user.type;
+
+    if (userType !== 'parent') {
+        return res.status(403).json({ error: 'This route is for parents only.' });
+    }
+
+    let connection;
+    try {
+        connection = await db.promisePool.getConnection();
+
+        // 1. Find the student linked to the parent
+        const [studentLink] = await connection.query(
+            'SELECT student_id FROM guardian_info WHERE id = ?',
+            [guardianUserId]
+        );
+
+        if (studentLink.length === 0 || !studentLink[0].student_id) {
+            // If no student is linked, they can't have a submission.
+            return res.json({ hasSubmitted: false });
+        }
+        const studentId = studentLink[0].student_id;
+
+        // 2. Check for a submission matching the activity and student
+        // We only need to know if it exists, so we select 1 for efficiency
+        const [submissions] = await connection.query(
+            'SELECT 1 FROM activity_submissions WHERE activity_id = ? AND student_id = ? LIMIT 1',
+            [activityId, studentId]
+        );
+
+        // 3. Return true if a submission was found, false otherwise
+        res.json({ hasSubmitted: submissions.length > 0 });
+
+    } catch (err) {
+        console.error('Database error:', err);
+        res.status(500).json({ error: 'Failed to check for submission.' });
+    } finally {
+        if (connection) connection.release();
+    }
+});
+
 // PUT /api/submissions/:submissionId - Parent edits a submission
 router.put('/:submissionId', authenticate, upload.single('submissionFile'), async (req, res) => {
     const { submissionId } = req.params;
