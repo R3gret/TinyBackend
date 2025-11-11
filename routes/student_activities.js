@@ -45,23 +45,29 @@ router.get('/', authenticate, async (req, res) => {
     try {
         connection = await db.promisePool.getConnection();
 
+        console.log('Fetching student_id for parent:', parentUserId);
         const [studentLink] = await connection.query('SELECT student_id FROM guardian_info WHERE id = ?', [parentUserId]);
         if (studentLink.length === 0 || !studentLink[0].student_id) {
+            console.error('No student linked to parent:', parentUserId);
             return res.status(404).json({ error: 'No student is linked to this parent account.' });
         }
         const studentId = studentLink[0].student_id;
 
+        console.log('Fetching student details for student_id:', studentId);
         const [studentDetails] = await connection.query('SELECT date_of_birth, cdc_id FROM students WHERE student_id = ?', [studentId]);
         if (studentDetails.length === 0) {
+            console.error('No student details found for student_id:', studentId);
             return res.status(404).json({ error: 'Linked student not found.' });
         }
         const { date_of_birth, cdc_id } = studentDetails[0];
 
         const studentAgeInMonths = calculateAgeInMonths(date_of_birth);
         if (studentAgeInMonths === null) {
+            console.error('Invalid date_of_birth for student:', studentId, date_of_birth);
             return res.json([]); // No activities if DOB is invalid
         }
 
+        console.log('Fetching age groups...');
         const [ageGroups] = await connection.query('SELECT age_group_id, age_range FROM age_groups');
         let targetAgeGroupId = null;
         for (const group of ageGroups) {
@@ -79,9 +85,11 @@ router.get('/', authenticate, async (req, res) => {
         }
 
         if (!targetAgeGroupId) {
+            console.error('No matching age group for student age:', studentAgeInMonths);
             return res.json([]);
         }
 
+        console.log('Fetching activities for cdc_id:', cdc_id, 'and age_group_id:', targetAgeGroupId);
         const [activities] = await connection.query(
             `SELECT tha.*, ag.age_range 
              FROM take_home_activities tha
@@ -95,7 +103,7 @@ router.get('/', authenticate, async (req, res) => {
 
     } catch (err) {
         console.error('Database error on /api/student/activities:', err);
-        res.status(500).json({ error: 'Failed to fetch student activities.' });
+        res.status(500).json({ error: 'Failed to fetch student activities.', details: err.message });
     } finally {
         if (connection) connection.release();
     }
