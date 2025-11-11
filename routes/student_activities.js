@@ -31,7 +31,7 @@ function parseAgeRangeToMonths(rangeStr) {
 }
 
 
-router.get('/', async (req, res) => {
+router.get('/', authenticate, async (req, res) => {
     const parentUserId = req.user.id;
     const userType = req.user.type;
 
