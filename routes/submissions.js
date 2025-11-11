@@ -7,19 +7,24 @@ const fs = require('fs');
 const db = require('../db');
 const authenticate = require('./authMiddleware');
 
-const submissionUploadDir = path.join(__dirname, '../uploads/submissions');
+const submissionUploadDir = path.resolve(__dirname, '../uploads/submissions');
+console.log('Submission upload directory:', submissionUploadDir);
 if (!fs.existsSync(submissionUploadDir)) {
-  fs.mkdirSync(submissionUploadDir, { recursive: true });
+    fs.mkdirSync(submissionUploadDir, { recursive: true });
+    console.log('Created submission upload directory:', submissionUploadDir);
 }
 
 const storage = multer.diskStorage({
-  destination: (req, file, cb) => {
-    cb(null, submissionUploadDir);
-  },
-  filename: (req, file, cb) => {
-    const safeOriginalName = file.originalname.replace(/[^a-zA-Z0-9._-]/g, '');
-    cb(null, `${Date.now()}-${safeOriginalName}`);
-  }
+    destination: (req, file, cb) => {
+        console.log('Uploading file:', file.originalname);
+        cb(null, submissionUploadDir);
+    },
+    filename: (req, file, cb) => {
+        const safeOriginalName = file.originalname.replace(/[^a-zA-Z0-9._-]/g, '');
+        const finalName = `${Date.now()}-${safeOriginalName}`;
+        console.log('Final filename:', finalName);
+        cb(null, finalName);
+    }
 });
 const upload = multer({ storage });
 
@@ -30,12 +35,20 @@ router.post('/', authenticate, upload.single('submissionFile'), async (req, res)
     const guardianUserId = req.user.id;
     const userType = req.user.type;
 
+    console.log('Upload request:', { activity_id, comments, userType, file });
+
     if (userType !== 'parent') {
-        if (file) fs.unlinkSync(file.path);
+        if (file) {
+            console.log('Unauthorized upload, deleting file:', file.path);
+            fs.unlinkSync(file.path);
+        }
         return res.status(403).json({ error: 'Only parents can upload submissions.' });
     }
     if (!activity_id || !file) {
-        if (file) fs.unlinkSync(file.path);
+        if (file) {
+            console.log('Missing activity_id or file, deleting file:', file.path);
+            fs.unlinkSync(file.path);
+        }
         return res.status(400).json({ error: 'Activity ID and a file are required.' });
     }
 
@@ -48,19 +61,33 @@ router.post('/', authenticate, upload.single('submissionFile'), async (req, res)
             [guardianUserId]
         );
         if (studentLink.length === 0 || !studentLink[0].student_id) {
-            if (file) fs.unlinkSync(file.path);
+            if (file) {
+                console.log('No student linked, deleting file:', file.path);
+                fs.unlinkSync(file.path);
+            }
             return res.status(404).json({ error: 'No student is linked to this parent account.' });
         }
         const student_id = studentLink[0].student_id;
         // Insert submission
+        console.log('Saving submission to DB:', {
+            activity_id,
+            student_id,
+            file_path: file.path,
+            comments,
+            guardianUserId
+        });
         const [result] = await connection.query(
             `INSERT INTO activity_submissions (activity_id, student_id, file_path, comments, submitted_by_guardian_id)
              VALUES (?, ?, ?, ?, ?)`,
             [activity_id, student_id, file.path, comments, guardianUserId]
         );
+        console.log('Submission saved, ID:', result.insertId);
         res.status(201).json({ success: true, submissionId: result.insertId });
     } catch (err) {
-        if (file) fs.unlinkSync(file.path);
+        if (file) {
+            console.log('Error during upload, deleting file:', file.path);
+            fs.unlinkSync(file.path);
+        }
         console.error('Database error:', err);
         res.status(500).json({ error: 'Failed to upload submission.' });
     } finally {
