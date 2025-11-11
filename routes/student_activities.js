@@ -1,6 +1,7 @@
 const express = require('express');
 const router = express.Router();
 const db = require('../db');
+const authenticate = require('./authMiddleware');
 
 // Helper function to calculate total age in months
 function calculateAgeInMonths(dob) {
