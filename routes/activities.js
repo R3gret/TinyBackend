@@ -24,7 +24,7 @@ const upload = multer({ storage });
 
 // CREATE activity (worker only)
 router.post('/', authenticate, upload.single('activityFile'), async (req, res) => {
-    const { title, description, due_date } = req.body;
+    const { title, description, due_date, age_group_id } = req.body;
     const file = req.file;
     const userType = req.user.type;
     const workerId = req.user.id;
@@ -42,8 +42,8 @@ router.post('/', authenticate, upload.single('activityFile'), async (req, res) =
         connection = await db.promisePool.getConnection();
         const filePath = file ? file.path : null;
         const [result] = await connection.query(
-            'INSERT INTO take_home_activities (title, description, due_date, assigned_by_worker_id, cdc_id, file_path) VALUES (?, ?, ?, ?, ?, ?)',
-            [title, description, due_date, workerId, cdcId, filePath]
+            'INSERT INTO take_home_activities (title, description, due_date, assigned_by_worker_id, cdc_id, file_path, age_group_id) VALUES (?, ?, ?, ?, ?, ?, ?)',
+            [title, description, due_date, workerId, cdcId, filePath, age_group_id]
         );
         res.status(201).json({ success: true, activityId: result.insertId });
     } catch (err) {
@@ -62,7 +62,13 @@ router.get('/', authenticate, async (req, res) => {
     try {
         connection = await db.promisePool.getConnection();
         const [activities] = await connection.query(
-            'SELECT * FROM take_home_activities WHERE cdc_id = ? ORDER BY creation_date DESC',
+            `SELECT 
+               tha.*, 
+               ag.age_range 
+             FROM take_home_activities tha
+             LEFT JOIN age_groups ag ON tha.age_group_id = ag.age_group_id
+             WHERE tha.cdc_id = ? 
+             ORDER BY tha.creation_date DESC`,
             [userCdcId]
         );
         res.json(activities);
