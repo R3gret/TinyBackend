@@ -1,3 +1,4 @@
+
 const express = require('express');
 const router = express.Router();
 const multer = require('multer');
@@ -432,6 +433,50 @@ router.get('/activity/:activityId/all-students', authenticate, async (req, res) 
     } catch (err) {
         console.error('Database error:', err);
         res.status(500).json({ error: 'Failed to fetch student submissions.' });
+    } finally {
+        if (connection) connection.release();
+    }
+});
+
+// GET /api/submissions/download/:submissionId - Download a submission file
+router.get('/download/:submissionId', authenticate, async (req, res) => {
+    const { submissionId } = req.params;
+    const userCdcId = req.user.cdc_id;
+    let connection;
+    try {
+        connection = await db.promisePool.getConnection();
+        // Get submission and activity info
+        const [submissions] = await connection.query(
+            `SELECT s.file_path, s.student_id, s.submitted_by_guardian_id, tha.cdc_id
+             FROM activity_submissions s
+             JOIN take_home_activities tha ON s.activity_id = tha.activity_id
+             WHERE s.submission_id = ?`,
+            [submissionId]
+        );
+        if (!submissions.length) {
+            return res.status(404).json({ success: false, message: 'Submission not found.' });
+        }
+        const submission = submissions[0];
+        // CDC-based authorization
+        if (submission.cdc_id !== userCdcId) {
+            return res.status(403).json({ success: false, message: 'You are not authorized to download this file.' });
+        }
+        // Check if file exists
+        if (!submission.file_path || !fs.existsSync(submission.file_path)) {
+            return res.status(404).json({ success: false, message: 'File not found on server.' });
+        }
+        // Stream the file for download
+        res.download(submission.file_path, path.basename(submission.file_path), (err) => {
+            if (err) {
+                console.error('File download error:', err);
+                if (!res.headersSent) {
+                    res.status(500).json({ success: false, message: 'Could not download the file.' });
+                }
+            }
+        });
+    } catch (err) {
+        console.error('Database error:', err);
+        res.status(500).json({ success: false, message: 'Failed to download submission file.' });
     } finally {
         if (connection) connection.release();
     }
