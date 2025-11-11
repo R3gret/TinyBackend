@@ -465,22 +465,15 @@ router.get('/download/:submissionId', authenticate, async (req, res) => {
         if (!submission.file_path || !fs.existsSync(submission.file_path)) {
             return res.status(404).json({ success: false, message: 'File not found on server.' });
         }
-        // Map absolute path to public URL
-        // Example: /opt/render/project/src/uploads/submissions/1762883781821-ca1.pem -> /uploads/submissions/1762883781821-ca1.pem
-        const uploadsDir = path.resolve(__dirname, '../uploads');
-        const relativePath = path.relative(uploadsDir, submission.file_path).replace(/\\/g, '/');
-        const publicUrl = `/uploads/${relativePath}`;
-        // Option 1: Redirect to public URL (recommended for static serving)
-        return res.redirect(publicUrl);
-        // Option 2: If you want to stream, use res.download as before (commented out)
-        // res.download(submission.file_path, path.basename(submission.file_path), (err) => {
-        //     if (err) {
-        //         console.error('File download error:', err);
-        //         if (!res.headersSent) {
-        //             res.status(500).json({ success: false, message: 'Could not download the file.' });
-        //         }
-        //     }
-        // });
+        // Stream the file for download (compatible with frontend fetch logic)
+        res.download(submission.file_path, path.basename(submission.file_path), (err) => {
+            if (err) {
+                console.error('File download error:', err);
+                if (!res.headersSent) {
+                    res.status(500).json({ success: false, message: 'Could not download the file.' });
+                }
+            }
+        });
     } catch (err) {
         console.error('Database error:', err);
         res.status(500).json({ success: false, message: 'Failed to download submission file.' });
