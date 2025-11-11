@@ -137,6 +137,52 @@ router.get('/student/:studentId', authenticate, async (req, res) => {
     }
 });
 
+// GET /api/submissions/mine/:activityId - Get the logged-in parent's submission for a specific activity
+router.get('/mine/:activityId', authenticate, async (req, res) => {
+    const { activityId } = req.params;
+    const guardianUserId = req.user.id;
+    const userType = req.user.type;
+
+    if (userType !== 'parent') {
+        return res.status(403).json({ error: 'This route is for parents only.' });
+    }
+
+    let connection;
+    try {
+        connection = await db.promisePool.getConnection();
+
+        // 1. Find the student linked to the parent
+        const [studentLink] = await connection.query(
+            'SELECT student_id FROM guardian_info WHERE id = ?',
+            [guardianUserId]
+        );
+
+        if (studentLink.length === 0 || !studentLink[0].student_id) {
+            return res.status(404).json({ error: 'No student is linked to this parent account.' });
+        }
+        const studentId = studentLink[0].student_id;
+
+        // 2. Find the submission matching the activity and student
+        const [submissions] = await connection.query(
+            'SELECT * FROM activity_submissions WHERE activity_id = ? AND student_id = ?',
+            [activityId, studentId]
+        );
+
+        // It's possible a parent hasn't submitted yet, so return the submission or null
+        if (submissions.length > 0) {
+            res.json(submissions[0]); // Return the first submission found
+        } else {
+            res.json(null); // No submission found for this activity by this parent
+        }
+
+    } catch (err) {
+        console.error('Database error:', err);
+        res.status(500).json({ error: 'Failed to fetch submission.' });
+    } finally {
+        if (connection) connection.release();
+    }
+});
+
 // PUT /api/submissions/:submissionId - Parent edits a submission
 router.put('/:submissionId', authenticate, upload.single('submissionFile'), async (req, res) => {
     const { submissionId } = req.params;
