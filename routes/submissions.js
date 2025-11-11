@@ -84,23 +84,23 @@ router.get('/activity/:activityId', authenticate, async (req, res) => {
             return res.status(403).json({ error: 'You are not authorized to view submissions for this activity.' });
         }
         const [submissions] = await connection.query(
-            `SELECT 
-                s.submission_id,
-                s.activity_id,
-                s.student_id,
-                s.file_path,
-                s.comments,
-                s.submission_date,
-                s.submitted_by_guardian_id,
-                u.username AS parent_name,
-                st.first_name AS student_first_name,
-                st.last_name AS student_last_name
-             FROM activity_submissions s
-             LEFT JOIN users u ON s.submitted_by_guardian_id = u.id
-             LEFT JOIN students st ON s.student_id = st.student_id
-             WHERE s.activity_id = ?
-             ORDER BY s.submission_date DESC`,
-            [activityId]
+                `SELECT 
+                    s.submission_id,
+                    s.activity_id,
+                    s.student_id,
+                    s.file_path,
+                    s.comments,
+                    s.submission_date,
+                    s.submitted_by_guardian_id,
+                    g.guardian_name AS parent_name,
+                    st.first_name AS student_first_name,
+                    st.last_name AS student_last_name
+                 FROM activity_submissions s
+                 LEFT JOIN guardian_info g ON s.submitted_by_guardian_id = g.id
+                 LEFT JOIN students st ON s.student_id = st.student_id
+                 WHERE s.activity_id = ?
+                 ORDER BY s.submission_date DESC`,
+                [activityId]
         );
         res.json(submissions);
     } catch (err) {
@@ -379,6 +379,51 @@ router.delete('/:submissionId', authenticate, async (req, res) => {
         if (connection) await connection.rollback();
         console.error('Database error:', err);
         res.status(500).json({ error: 'Failed to delete submission.' });
+    } finally {
+        if (connection) connection.release();
+    }
+});
+
+// GET /api/submissions/activity/:activityId/all-students - Get all students' submission records for a selected activity
+router.get('/activity/:activityId/all-students', authenticate, async (req, res) => {
+    const { activityId } = req.params;
+    const userType = req.user.type;
+    const userCdcId = req.user.cdc_id;
+    let connection;
+    try {
+        connection = await db.promisePool.getConnection();
+        // Check if activity belongs to user's CDC
+        const [activity] = await connection.query(
+            'SELECT cdc_id FROM take_home_activities WHERE activity_id = ?',
+            [activityId]
+        );
+        if (!activity.length || activity[0].cdc_id !== userCdcId) {
+            return res.status(403).json({ error: 'You are not authorized to view submissions for this activity.' });
+        }
+        // Get all students in the CDC
+        const [students] = await connection.query(
+            'SELECT student_id, first_name, last_name FROM students WHERE cdc_id = ?',
+            [userCdcId]
+        );
+        // For each student, check if they have a submission for the activity
+        const results = [];
+        for (const student of students) {
+            const [submission] = await connection.query(
+                `SELECT submission_id, file_path, comments, submission_date, submitted_by_guardian_id FROM activity_submissions WHERE activity_id = ? AND student_id = ? LIMIT 1`,
+                [activityId, student.student_id]
+            );
+            results.push({
+                student_id: student.student_id,
+                first_name: student.first_name,
+                last_name: student.last_name,
+                hasSubmitted: submission.length > 0,
+                submission: submission.length > 0 ? submission[0] : null
+            });
+        }
+        res.json(results);
+    } catch (err) {
+        console.error('Database error:', err);
+        res.status(500).json({ error: 'Failed to fetch student submissions.' });
     } finally {
         if (connection) connection.release();
     }
