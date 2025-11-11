@@ -1,3 +1,4 @@
+
 const express = require('express');
 const router = express.Router();
 const db = require('../db');
@@ -75,6 +76,35 @@ router.get('/', authenticate, async (req, res) => {
     } catch (err) {
         console.error('Database error:', err);
         res.status(500).json({ error: 'Failed to fetch activities.' });
+    } finally {
+        if (connection) connection.release();
+    }
+});
+
+// GET /api/activities/:activityId - Get details for a single activity
+router.get('/:activityId', authenticate, async (req, res) => {
+    const { activityId } = req.params;
+    const userCdcId = req.user.cdc_id;
+    let connection;
+    try {
+        connection = await db.promisePool.getConnection();
+        const [activities] = await connection.query(
+            `SELECT 
+               tha.*, 
+               ag.age_range 
+             FROM take_home_activities tha
+             LEFT JOIN age_groups ag ON tha.age_group_id = ag.age_group_id
+             WHERE tha.activity_id = ? AND tha.cdc_id = ?
+             LIMIT 1`,
+            [activityId, userCdcId]
+        );
+        if (activities.length === 0) {
+            return res.status(404).json({ error: 'Activity not found or you do not have permission to view it.' });
+        }
+        res.json(activities[0]);
+    } catch (err) {
+        console.error('Database error:', err);
+        res.status(500).json({ error: 'Failed to fetch activity.' });
     } finally {
         if (connection) connection.release();
     }
