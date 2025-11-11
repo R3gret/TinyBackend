@@ -393,19 +393,24 @@ router.get('/activity/:activityId/all-students', authenticate, async (req, res) 
     try {
         connection = await db.promisePool.getConnection();
         // Check if activity belongs to user's CDC
-        const [activity] = await connection.query(
+        // Get activity details including age_group_id and age_range
+        const [activityRows] = await connection.query(
             `SELECT tha.cdc_id, tha.age_group_id, ag.age_range
              FROM take_home_activities tha
              LEFT JOIN age_groups ag ON tha.age_group_id = ag.age_group_id
              WHERE tha.activity_id = ?`,
             [activityId]
         );
-        if (!activity.length || activity[0].cdc_id !== userCdcId) {
+        if (!activityRows.length || activityRows[0].cdc_id !== userCdcId) {
             return res.status(403).json({ error: 'You are not authorized to view submissions for this activity.' });
         }
+        const activityInfo = {
+            age_group_id: activityRows[0].age_group_id,
+            age_range: activityRows[0].age_range
+        };
         // Get all students in the CDC
         const [students] = await connection.query(
-            'SELECT student_id, first_name, last_name, age_group_id FROM students WHERE cdc_id = ?',
+            'SELECT student_id, first_name, last_name FROM students WHERE cdc_id = ?',
             [userCdcId]
         );
         // For each student, check if they have a submission for the activity
@@ -419,16 +424,11 @@ router.get('/activity/:activityId/all-students', authenticate, async (req, res) 
                 student_id: student.student_id,
                 first_name: student.first_name,
                 last_name: student.last_name,
-                student_age_group_id: student.age_group_id,
                 hasSubmitted: submission.length > 0,
                 submission: submission.length > 0 ? submission[0] : null
             });
         }
-        res.json({
-            activity_age_group_id: activity[0].age_group_id,
-            activity_age_range: activity[0].age_range,
-            students: results
-        });
+        res.json({ activity: activityInfo, students: results });
     } catch (err) {
         console.error('Database error:', err);
         res.status(500).json({ error: 'Failed to fetch student submissions.' });
