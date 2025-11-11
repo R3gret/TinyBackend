@@ -54,16 +54,16 @@ router.get('/', authenticate, async (req, res) => {
         const studentId = studentLink[0].student_id;
 
         console.log('Fetching student details for student_id:', studentId);
-        const [studentDetails] = await connection.query('SELECT date_of_birth, cdc_id FROM students WHERE student_id = ?', [studentId]);
+        const [studentDetails] = await connection.query('SELECT birthdate, cdc_id FROM students WHERE student_id = ?', [studentId]);
         if (studentDetails.length === 0) {
             console.error('No student details found for student_id:', studentId);
             return res.status(404).json({ error: 'Linked student not found.' });
         }
-        const { date_of_birth, cdc_id } = studentDetails[0];
+        const { birthdate, cdc_id } = studentDetails[0];
 
-        const studentAgeInMonths = calculateAgeInMonths(date_of_birth);
+        const studentAgeInMonths = calculateAgeInMonths(birthdate);
         if (studentAgeInMonths === null) {
-            console.error('Invalid date_of_birth for student:', studentId, date_of_birth);
+            console.error('Invalid birthdate for student:', studentId, birthdate);
             return res.json([]); // No activities if DOB is invalid
         }
 
