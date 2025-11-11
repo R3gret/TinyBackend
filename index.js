@@ -64,6 +64,7 @@ app.use('/api/get_activities', authenticate, require('./routes/get_activities'))
 app.use('/api/get_scheduled_dates', authenticate, require('./routes/get_scheduled_dates'));
 app.use('/api/student-profile', require('./routes/student_profile'));
 app.use('/api/activities', authenticate, require('./routes/activities'));
+app.use('/api/student/activities', authenticate, require('./routes/student_activities'));
 
 // Static files
 app.use('/uploads/announcements', express.static(path.join(__dirname, 'uploads/announcements')));
