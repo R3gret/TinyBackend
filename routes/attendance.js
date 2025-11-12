@@ -316,4 +316,59 @@ router.get('/weekly', async (req, res) => {
     if (connection) connection.release();
   }
 });
+
+// GET today's attendance for a CDC (required cdc_id)
+router.get('/today', async (req, res) => {
+  let connection;
+  try {
+    connection = await db.promisePool.getConnection();
+
+    const { cdc_id } = req.query;
+    if (cdc_id === undefined) {
+      return res.status(400).json({ success: false, message: 'cdc_id query parameter is required' });
+    }
+    const cdcIdNum = parseInt(cdc_id, 10);
+    if (Number.isNaN(cdcIdNum)) {
+      return res.status(400).json({ success: false, message: 'Invalid cdc_id' });
+    }
+
+    // Return aggregated stats for today for this CDC (same shape as /stats)
+    const params = [cdcIdNum];
+
+    const [totalResults] = await connection.query(
+      `SELECT COUNT(*) as total
+       FROM attendance a
+       JOIN students s ON a.student_id = s.student_id
+       WHERE s.cdc_id = ? AND DATE(a.attendance_date) = CURDATE()`,
+      params
+    );
+
+    const [presentResults] = await connection.query(
+      `SELECT COUNT(*) as present
+       FROM attendance a
+       JOIN students s ON a.student_id = s.student_id
+       WHERE s.cdc_id = ? AND DATE(a.attendance_date) = CURDATE() AND a.status IN ('Present', 'Late')`,
+      params
+    );
+
+    const total = totalResults[0].total || 0;
+    const present = presentResults[0].present || 0;
+    const attendanceRate = total > 0 ? Math.round((present / total) * 100) : 0;
+
+    res.json({
+      success: true,
+      stats: {
+        totalRecords: total,
+        presentRecords: present,
+        attendanceRate: attendanceRate
+      }
+    });
+
+  } catch (err) {
+    console.error('Database error:', err);
+    res.status(500).json({ success: false, message: err.message || 'Database error' });
+  } finally {
+    if (connection) connection.release();
+  }
+});
 module.exports = router;
