@@ -134,6 +134,7 @@ router.get('/gender-distribution', authMiddleware, async (req, res) => {
   let connection;
   try {
     connection = await db.promisePool.getConnection();
+    console.log('Executing query:', query, 'with params:', params);
     const [results] = await connection.query(query, params);
 
     // Transform results into a more usable format
@@ -178,26 +179,26 @@ router.get('/enrollment-stats', authMiddleware, async (req, res) => {
     }
     
     // Query for current month enrollments
-    const [currentMonthResults] = await connection.query(
-      `SELECT COUNT(*) as count 
+    const currentMonthQuery = `SELECT COUNT(*) as count 
        FROM students 
-       WHERE MONTH(enrolled_at) = ? AND YEAR(enrolled_at) = ? AND cdc_id = ?`,
-      [currentMonth, currentYear, cdc_id]
-    );
+       WHERE MONTH(enrolled_at) = ? AND YEAR(enrolled_at) = ? AND cdc_id = ?`;
+    const currentMonthParams = [currentMonth, currentYear, cdc_id];
+    console.log('Executing query:', currentMonthQuery, 'with params:', currentMonthParams);
+    const [currentMonthResults] = await connection.query(currentMonthQuery, currentMonthParams);
     
     // Query for last month enrollments
-    const [lastMonthResults] = await connection.query(
-      `SELECT COUNT(*) as count 
+    const lastMonthQuery = `SELECT COUNT(*) as count 
        FROM students 
-       WHERE MONTH(enrolled_at) = ? AND YEAR(enrolled_at) = ? AND cdc_id = ?`,
-      [lastMonth, lastYear, cdc_id]
-    );
+       WHERE MONTH(enrolled_at) = ? AND YEAR(enrolled_at) = ? AND cdc_id = ?`;
+    const lastMonthParams = [lastMonth, lastYear, cdc_id];
+    console.log('Executing query:', lastMonthQuery, 'with params:', lastMonthParams);
+    const [lastMonthResults] = await connection.query(lastMonthQuery, lastMonthParams);
     
     // Query for total students (all months)
-    const [totalResults] = await connection.query(
-      `SELECT COUNT(*) as total FROM students WHERE cdc_id = ?`,
-      [cdc_id]
-    );
+    const totalQuery = `SELECT COUNT(*) as total FROM students WHERE cdc_id = ?`;
+    const totalParams = [cdc_id];
+    console.log('Executing query:', totalQuery, 'with params:', totalParams);
+    const [totalResults] = await connection.query(totalQuery, totalParams);
     
     return res.json({
       success: true,
@@ -253,12 +254,12 @@ router.get('/age-distribution', authMiddleware, async (req, res) => {
       const distribution = {};
       
       for (const [group, dates] of Object.entries(ageGroups)) {
-        const [results] = await connection.query(
-          `SELECT COUNT(*) as count 
+        const query = `SELECT COUNT(*) as count 
            FROM students 
-           WHERE birthdate BETWEEN ? AND ? AND cdc_id = ?`,
-          [dates.minDate.toISOString().split('T')[0], dates.maxDate.toISOString().split('T')[0], cdc_id]
-        );
+           WHERE birthdate BETWEEN ? AND ? AND cdc_id = ?`;
+        const params = [dates.minDate.toISOString().split('T')[0], dates.maxDate.toISOString().split('T')[0], cdc_id];
+        console.log('Executing query for group', group, ':', query, 'with params:', params);
+        const [results] = await connection.query(query, params);
         
         distribution[group] = results[0].count;
       }
