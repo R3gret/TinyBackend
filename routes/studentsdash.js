@@ -1,11 +1,13 @@
 const express = require('express');
 const router = express.Router();
 const db = require('../db');
+const authenticate = require('./authMiddleware');
 
-router.get('/', async (req, res) => {
+router.get('/', authenticate, async (req, res) => {
   const { ageFilter } = req.query;
   
-  let query = 'SELECT student_id, first_name, middle_name, last_name, birthdate, gender FROM students';
+    let query = 'SELECT student_id, first_name, middle_name, last_name, birthdate, gender, cdc_id FROM students';
+    const userCdcId = req.user.cdc_id;
   const params = [];
   
   if (ageFilter) {
@@ -36,9 +38,16 @@ router.get('/', async (req, res) => {
         });
     }
     
-    query += ' WHERE birthdate BETWEEN ? AND ?';
-    params.push(minDate.toISOString().split('T')[0], maxDate.toISOString().split('T')[0]);
+      let whereClauses = [];
+      whereClauses.push('birthdate BETWEEN ? AND ?');
+      params.push(minDate.toISOString().split('T')[0], maxDate.toISOString().split('T')[0]);
   }
+    // Always filter by CDC
+    whereClauses.push('cdc_id = ?');
+    params.push(userCdcId);
+    if (whereClauses.length) {
+      query += ' WHERE ' + whereClauses.join(' AND ');
+    }
 
   let connection;
   try {
@@ -91,18 +100,19 @@ router.get('/', async (req, res) => {
 });
 
 // New route to get gender distribution
-router.get('/gender-distribution', async (req, res) => {
+router.get('/gender-distribution', authenticate, async (req, res) => {
   const { ageFilter } = req.query;
-  
+
+  // Build base query and params, apply CDC filter and optional age filter
   let query = 'SELECT gender, COUNT(*) as count FROM students';
   const params = [];
-  
+  const userCdcId = req.user.cdc_id;
+  const whereClauses = [];
+
   if (ageFilter) {
-    // Calculate date ranges based on age filter using native Date
     const today = new Date();
     let minDate, maxDate;
-    
-    switch(ageFilter) {
+    switch (ageFilter) {
       case '3-4':
         maxDate = new Date(today.getFullYear() - 3, today.getMonth(), today.getDate());
         minDate = new Date(today.getFullYear() - 4, today.getMonth(), today.getDate());
@@ -116,16 +126,21 @@ router.get('/gender-distribution', async (req, res) => {
         minDate = new Date(today.getFullYear() - 6, today.getMonth(), today.getDate());
         break;
       default:
-        return res.status(400).json({ 
-          success: false, 
-          message: 'Invalid age filter' 
-        });
+        return res.status(400).json({ success: false, message: 'Invalid age filter' });
     }
-    
-    query += ' WHERE birthdate BETWEEN ? AND ?';
+
+    whereClauses.push('birthdate BETWEEN ? AND ?');
     params.push(minDate.toISOString().split('T')[0], maxDate.toISOString().split('T')[0]);
   }
-  
+
+  // Always filter by CDC
+  whereClauses.push('cdc_id = ?');
+  params.push(userCdcId);
+
+  if (whereClauses.length) {
+    query += ' WHERE ' + whereClauses.join(' AND ');
+  }
+
   query += ' GROUP BY gender';
 
   let connection;
@@ -133,22 +148,15 @@ router.get('/gender-distribution', async (req, res) => {
     connection = await db.promisePool.getConnection();
     const [results] = await connection.query(query, params);
 
-    // Transform results into a more usable format
     const distribution = {};
     results.forEach(row => {
       distribution[row.gender] = row.count;
     });
 
-    return res.json({
-      success: true,
-      distribution
-    });
+    return res.json({ success: true, distribution });
   } catch (err) {
     console.error('Database query error:', err);
-    return res.status(500).json({ 
-      success: false, 
-      message: 'Database error' 
-    });
+    return res.status(500).json({ success: false, message: 'Database error' });
   } finally {
     if (connection) connection.release();
   }
@@ -156,15 +164,15 @@ router.get('/gender-distribution', async (req, res) => {
 
 
 // Add this new route to your students router
-router.get('/enrollment-stats', async (req, res) => {
+router.get('/enrollment-stats', authenticate, async (req, res) => {
   let connection;
   try {
     connection = await db.promisePool.getConnection();
-    
+
     // Get current month stats
     const currentMonth = new Date().getMonth() + 1;
     const currentYear = new Date().getFullYear();
-    
+
     // Get last month stats (handle year transition)
     let lastMonth = currentMonth - 1;
     let lastYear = currentYear;
@@ -172,26 +180,30 @@ router.get('/enrollment-stats', async (req, res) => {
       lastMonth = 12;
       lastYear = currentYear - 1;
     }
-    
+
+    // CDC filter
+    const userCdcId = req.user.cdc_id;
+
     // Query for current month enrollments
     const [currentMonthResults] = await connection.query(
       `SELECT COUNT(*) as count 
        FROM students 
-       WHERE MONTH(enrolled_at) = ? AND YEAR(enrolled_at) = ?`,
-      [currentMonth, currentYear]
+       WHERE MONTH(enrolled_at) = ? AND YEAR(enrolled_at) = ? AND cdc_id = ?`,
+      [currentMonth, currentYear, userCdcId]
     );
-    
+
     // Query for last month enrollments
     const [lastMonthResults] = await connection.query(
       `SELECT COUNT(*) as count 
        FROM students 
-       WHERE MONTH(enrolled_at) = ? AND YEAR(enrolled_at) = ?`,
-      [lastMonth, lastYear]
+       WHERE MONTH(enrolled_at) = ? AND YEAR(enrolled_at) = ? AND cdc_id = ?`,
+      [lastMonth, lastYear, userCdcId]
     );
-    
+
     // Query for total students (all months)
     const [totalResults] = await connection.query(
-      `SELECT COUNT(*) as total FROM students`
+      `SELECT COUNT(*) as total FROM students WHERE cdc_id = ?`,
+      [userCdcId]
     );
     
     return res.json({
@@ -216,7 +228,7 @@ router.get('/enrollment-stats', async (req, res) => {
 });
 
 // New route to get age group distribution
-router.get('/age-distribution', async (req, res) => {
+router.get('/age-distribution', authenticate, async (req, res) => {
     let connection;
     try {
       connection = await db.promisePool.getConnection();
@@ -246,14 +258,15 @@ router.get('/age-distribution', async (req, res) => {
       // Query to count students in each age group
       const distribution = {};
       
+      const userCdcId = req.user.cdc_id;
       for (const [group, dates] of Object.entries(ageGroups)) {
         const [results] = await connection.query(
           `SELECT COUNT(*) as count 
            FROM students 
-           WHERE birthdate BETWEEN ? AND ?`,
-          [dates.minDate.toISOString().split('T')[0], dates.maxDate.toISOString().split('T')[0]]
+           WHERE birthdate BETWEEN ? AND ? AND cdc_id = ?`,
+          [dates.minDate.toISOString().split('T')[0], dates.maxDate.toISOString().split('T')[0], userCdcId]
         );
-        
+
         distribution[group] = results[0].count;
       }
       
