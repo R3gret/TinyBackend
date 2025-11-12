@@ -257,6 +257,10 @@ router.get('/age-distribution', authMiddleware, async (req, res) => {
       
       // Calculate date ranges for each age group
       const ageGroups = {
+        '0-3': {
+          minDate: new Date(currentYear - 3, currentMonth, currentDay),
+          maxDate: today
+        },
         '3-4': {
           minDate: new Date(currentYear - 4, currentMonth, currentDay),
           maxDate: new Date(currentYear - 3, currentMonth, currentDay)
