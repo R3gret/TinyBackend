@@ -96,6 +96,13 @@ router.get('/', authMiddleware, async (req, res) => {
 router.get('/gender-distribution', authMiddleware, async (req, res) => {
   const { ageFilter } = req.query;
   const { cdc_id } = req.user;
+
+  if (!cdc_id) {
+    return res.status(400).json({
+      success: false,
+      message: 'User is not associated with a CDC.'
+    });
+  }
   
   let query = 'SELECT gender, COUNT(*) as count FROM students WHERE cdc_id = ?';
   const params = [cdc_id];
@@ -164,6 +171,13 @@ router.get('/enrollment-stats', authMiddleware, async (req, res) => {
   let connection;
   try {
     const { cdc_id } = req.user;
+
+    if (!cdc_id) {
+      return res.status(400).json({
+        success: false,
+        message: 'User is not associated with a CDC.'
+      });
+    }
     connection = await db.promisePool.getConnection();
     
     // Get current month stats
@@ -226,6 +240,13 @@ router.get('/age-distribution', authMiddleware, async (req, res) => {
     let connection;
     try {
       const { cdc_id } = req.user;
+
+      if (!cdc_id) {
+        return res.status(400).json({
+          success: false,
+          message: 'User is not associated with a CDC.'
+        });
+      }
       connection = await db.promisePool.getConnection();
       
       // Get current date for age calculations
