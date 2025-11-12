@@ -5,7 +5,7 @@ const authMiddleware = require('./authMiddleware');
 
 router.get('/', authMiddleware, async (req, res) => {
   const { ageFilter } = req.query;
-  const { cdc_id } = req.session.user;
+  const { cdc_id } = req.user;
   
   let query = 'SELECT student_id, first_name, middle_name, last_name, birthdate, gender FROM students WHERE cdc_id = ?';
   const params = [cdc_id];
@@ -95,7 +95,7 @@ router.get('/', authMiddleware, async (req, res) => {
 // New route to get gender distribution
 router.get('/gender-distribution', authMiddleware, async (req, res) => {
   const { ageFilter } = req.query;
-  const { cdc_id } = req.session.user;
+  const { cdc_id } = req.user;
   
   let query = 'SELECT gender, COUNT(*) as count FROM students WHERE cdc_id = ?';
   const params = [cdc_id];
@@ -163,7 +163,7 @@ router.get('/gender-distribution', authMiddleware, async (req, res) => {
 router.get('/enrollment-stats', authMiddleware, async (req, res) => {
   let connection;
   try {
-    const { cdc_id } = req.session.user;
+    const { cdc_id } = req.user;
     connection = await db.promisePool.getConnection();
     
     // Get current month stats
@@ -225,7 +225,7 @@ router.get('/enrollment-stats', authMiddleware, async (req, res) => {
 router.get('/age-distribution', authMiddleware, async (req, res) => {
     let connection;
     try {
-      const { cdc_id } = req.session.user;
+      const { cdc_id } = req.user;
       connection = await db.promisePool.getConnection();
       
       // Get current date for age calculations
