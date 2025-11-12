@@ -5,11 +5,13 @@ const authenticate = require('./authMiddleware');
 
 router.get('/', authenticate, async (req, res) => {
   const { ageFilter } = req.query;
-  
+
     let query = 'SELECT student_id, first_name, middle_name, last_name, birthdate, gender, cdc_id FROM students';
     const userCdcId = req.user.cdc_id;
   const params = [];
-  
+  // Always prepare a whereClauses array so we can conditionally add filters
+  const whereClauses = [];
+
   if (ageFilter) {
     // Calculate date ranges based on age filter using native Date
     const today = new Date();
@@ -38,7 +40,6 @@ router.get('/', authenticate, async (req, res) => {
         });
     }
     
-      let whereClauses = [];
       whereClauses.push('birthdate BETWEEN ? AND ?');
       params.push(minDate.toISOString().split('T')[0], maxDate.toISOString().split('T')[0]);
   }
