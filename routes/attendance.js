@@ -2,8 +2,11 @@ const express = require('express');
 const router = express.Router();
 const db = require('../db');
 const { body, validationResult } = require('express-validator');
+const authMiddleware = require('./authMiddleware');
 
 // Insert attendance record with status
+// Protect all attendance routes with auth
+router.use(authMiddleware);
 router.post('/', [
   body('student_id').isInt().withMessage('Student ID must be an integer'),
   body('attendance_date').isISO8601().withMessage('Invalid date format (YYYY-MM-DD)'),
@@ -186,18 +189,34 @@ router.get('/stats', async (req, res) => {
   let connection;
   try {
     connection = await db.promisePool.getConnection();
+    // Optional filtering by cdc_id (provided as query param)
+    const { cdc_id } = req.query;
+    let joinStudents = false;
+    const params = [];
+    if (cdc_id !== undefined) {
+      const cdcIdNum = parseInt(cdc_id, 10);
+      if (Number.isNaN(cdcIdNum)) {
+        return res.status(400).json({ success: false, message: 'Invalid cdc_id' });
+      }
+      joinStudents = true;
+      params.push(cdcIdNum);
+    }
 
-    // Get total attendance recordss
-    const [totalResults] = await connection.query(
-      `SELECT COUNT(*) as total FROM attendance`
-    );
+    // Get total attendance records (optionally filtered by cdc)
+    let totalSql = 'SELECT COUNT(*) as total FROM attendance a';
+    if (joinStudents) {
+      totalSql += ' JOIN students s ON a.student_id = s.student_id WHERE s.cdc_id = ?';
+    }
+    const [totalResults] = await connection.query(totalSql, joinStudents ? params : []);
 
-    // Get present records (count Present and Late as present)
-    const [presentResults] = await connection.query(
-      `SELECT COUNT(*) as present 
-       FROM attendance 
-       WHERE status IN ('Present', 'Late')`
-    );
+    // Get present records (count Present and Late as present), optionally filtered
+    let presentSql = "SELECT COUNT(*) as present FROM attendance a WHERE a.status IN ('Present', 'Late')";
+    const presentParams = [];
+    if (joinStudents) {
+      presentSql = "SELECT COUNT(*) as present FROM attendance a JOIN students s ON a.student_id = s.student_id WHERE s.cdc_id = ? AND a.status IN ('Present', 'Late')";
+      presentParams.push(params[0]);
+    }
+    const [presentResults] = await connection.query(presentSql, presentParams);
 
     // Calculate percentage
     const attendanceRate = totalResults[0].total > 0 
