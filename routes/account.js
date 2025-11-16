@@ -304,11 +304,11 @@ router.get('/:id/details', async (req, res) => {
           o.email AS contact_email,
           o.phone,
           o.address,
-          o.organization,
-          o.website,
-          o.social_media
+          g.relationship AS guardian_relationship,
+          g.phone_num AS guardian_phone_num
         FROM users u
         LEFT JOIN user_other_info o ON u.id = o.user_id
+        LEFT JOIN guardian_info g ON u.id = g.id
         WHERE u.id = ?
       `, [req.params.id]);
 
@@ -322,17 +322,26 @@ router.get('/:id/details', async (req, res) => {
           full_name: results[0].full_name,
           email: results[0].contact_email,
           phone: results[0].phone,
-          address: results[0].address,
-          organization: results[0].organization,
-          website: results[0].website,
-          social_media: results[0].social_media
+          address: results[0].address
         }
       };
+      // Include guardian relationship and phone (if present)
+      if (results[0].guardian_relationship) {
+        userData.other_info.relationship = results[0].guardian_relationship;
+      }
+      if (results[0].guardian_phone_num) {
+        // keep consistent naming under other_info.phone if no phone exists there, otherwise add guardian_phone
+        if (!userData.other_info.phone) {
+          userData.other_info.phone = results[0].guardian_phone_num;
+        } else {
+          userData.other_info.guardian_phone = results[0].guardian_phone_num;
+        }
+      }
 
       // Clean up duplicated fields
       [
         'full_name', 'contact_email', 'phone', 'address',
-        'organization', 'website', 'social_media'
+        'guardian_relationship', 'guardian_phone_num'
       ].forEach(field => delete userData[field]);
 
       return userData;
