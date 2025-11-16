@@ -250,9 +250,9 @@ router.delete('/:id', async (req, res) => {
           [req.params.id]
         );
 
-        // Also remove guardian_info row if this user is a guardian/parent
+        // Instead of deleting the guardian_info row, unlink it by clearing the id
         await connection.query(
-          'DELETE FROM guardian_info WHERE id = ?',
+          'UPDATE guardian_info SET id = NULL WHERE id = ?',
           [req.params.id]
         );
 

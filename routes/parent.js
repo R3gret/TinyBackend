@@ -247,16 +247,44 @@ router.delete('/:id', authenticate, async (req, res) => {
 
   try {
     connection = await db.promisePool.getConnection();
-    const [result] = await connection.query(
-      'DELETE FROM users WHERE id = ?', 
-      [id]
-    );
+    await connection.beginTransaction();
 
-    if (result.affectedRows === 0) {
-      return res.status(404).json({ error: 'User not found' });
+    try {
+      // Delete any supplemental user info
+      await connection.query(
+        'DELETE FROM user_other_info WHERE user_id = ?',
+        [id]
+      );
+
+      // Clear submissions that reference this guardian
+      await connection.query(
+        'UPDATE activity_submissions SET submitted_by_guardian_id = NULL WHERE submitted_by_guardian_id = ?',
+        [id]
+      );
+
+      // Unlink guardian_info row (keep the guardian record but remove the user link)
+      await connection.query(
+        'UPDATE guardian_info SET id = NULL WHERE id = ?',
+        [id]
+      );
+
+      // Finally delete the user
+      const [result] = await connection.query(
+        'DELETE FROM users WHERE id = ?', 
+        [id]
+      );
+
+      if (result.affectedRows === 0) {
+        await connection.rollback();
+        return res.status(404).json({ error: 'User not found' });
+      }
+
+      await connection.commit();
+      res.json({ success: true, message: 'User deleted successfully' });
+    } catch (err) {
+      await connection.rollback();
+      throw err;
     }
-
-    res.json({ success: true, message: 'User deleted successfully' });
   } catch (err) {
     console.error('Database error:', err);
     res.status(500).json({ error: 'Failed to delete user' });
