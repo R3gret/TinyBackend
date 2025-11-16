@@ -244,6 +244,18 @@ router.delete('/:id', async (req, res) => {
           [req.params.id]
         );
 
+        // If this user is a guardian/parent, first clear references in activity_submissions
+        await connection.query(
+          'UPDATE activity_submissions SET submitted_by_guardian_id = NULL WHERE submitted_by_guardian_id = ?',
+          [req.params.id]
+        );
+
+        // Also remove guardian_info row if this user is a guardian/parent
+        await connection.query(
+          'DELETE FROM guardian_info WHERE id = ?',
+          [req.params.id]
+        );
+
         // Then delete user
         const [results] = await connection.query(
           'DELETE FROM users WHERE id = ?',
