@@ -59,6 +59,7 @@ app.use('/api/attendance', require('./routes/attendance'));
 app.use('/api/msw', require('./routes/msw'));
 app.use('/api/users', require('./routes/users'));
 app.use('/api/account', require('./routes/account')); // This will properly mount account routes
+app.use('/api/user-info', require('./routes/account')); // Mount account routes at /api/user-info for direct access
 app.use('/api/user_session', require('./routes/user_session'));
 app.use('/api/domains', require('./routes/domains'));
 app.use('/api/files', authenticate, require('./routes/fileRoutes'));

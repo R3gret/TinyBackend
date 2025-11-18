@@ -375,9 +375,26 @@ const userInfoRouter = express.Router();
 
 userInfoRouter.post('/', [
   body('user_id').isInt().withMessage('Invalid user ID'),
-  body('email').isEmail().optional().withMessage('Invalid email format'),
-  body('website').isURL().optional().withMessage('Invalid website URL'),
-  body('social_media').isString().optional()
+  body('email')
+    .optional({ values: 'falsy' })
+    .custom((value) => {
+      if (!value || value.trim() === '') return true;
+      return /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(value);
+    })
+    .withMessage('Invalid email format'),
+  body('website')
+    .optional({ values: 'falsy' })
+    .custom((value) => {
+      if (!value || value.trim() === '') return true;
+      try {
+        new URL(value);
+        return true;
+      } catch {
+        return false;
+      }
+    })
+    .withMessage('Invalid website URL'),
+  body('social_media').optional({ values: 'falsy' }).isString()
 ], async (req, res) => {
   const errors = validationResult(req);
   if (!errors.isEmpty()) {
@@ -389,6 +406,14 @@ userInfoRouter.post('/', [
   }
 
   try {
+    // Helper function to convert empty strings to null
+    const nullIfEmpty = (value) => {
+      if (value === undefined || value === null || value === '') {
+        return null;
+      }
+      return value;
+    };
+
     const {
       user_id,
       full_name,
@@ -399,6 +424,17 @@ userInfoRouter.post('/', [
       website,
       social_media
     } = req.body;
+
+    // Convert empty strings to null for optional fields
+    const sanitizedData = {
+      full_name: nullIfEmpty(full_name),
+      email: nullIfEmpty(email),
+      phone: nullIfEmpty(phone),
+      address: nullIfEmpty(address),
+      organization: nullIfEmpty(organization),
+      website: nullIfEmpty(website),
+      social_media: nullIfEmpty(social_media)
+    };
 
     await withConnection(async (connection) => {
       await connection.beginTransaction();
@@ -427,7 +463,16 @@ userInfoRouter.post('/', [
             SET full_name = ?, email = ?, phone = ?, address = ?, 
                 organization = ?, website = ?, social_media = ?
             WHERE user_id = ?`,
-            [full_name, email, phone, address, organization, website, social_media, user_id]
+            [
+              sanitizedData.full_name,
+              sanitizedData.email,
+              sanitizedData.phone,
+              sanitizedData.address,
+              sanitizedData.organization,
+              sanitizedData.website,
+              sanitizedData.social_media,
+              user_id
+            ]
           );
         } else {
           // Insert new info
@@ -435,7 +480,16 @@ userInfoRouter.post('/', [
             `INSERT INTO user_other_info 
             (user_id, full_name, email, phone, address, organization, website, social_media) 
             VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
-            [user_id, full_name, email, phone, address, organization, website, social_media]
+            [
+              user_id,
+              sanitizedData.full_name,
+              sanitizedData.email,
+              sanitizedData.phone,
+              sanitizedData.address,
+              sanitizedData.organization,
+              sanitizedData.website,
+              sanitizedData.social_media
+            ]
           );
         }
 
@@ -461,5 +515,147 @@ userInfoRouter.post('/', [
 });
 
 router.use('/:userId/info', userInfoRouter);
+
+// Direct /user-info route (can be mounted at /api/user-info)
+router.post('/user-info', [
+  body('user_id').isInt().withMessage('Invalid user ID'),
+  body('email')
+    .optional({ values: 'falsy' })
+    .custom((value) => {
+      if (!value || value.trim() === '') return true;
+      return /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(value);
+    })
+    .withMessage('Invalid email format'),
+  body('website')
+    .optional({ values: 'falsy' })
+    .custom((value) => {
+      if (!value || value.trim() === '') return true;
+      try {
+        new URL(value);
+        return true;
+      } catch {
+        return false;
+      }
+    })
+    .withMessage('Invalid website URL'),
+  body('social_media').optional({ values: 'falsy' }).isString()
+], async (req, res) => {
+  const errors = validationResult(req);
+  if (!errors.isEmpty()) {
+    return res.status(400).json({ 
+      success: false, 
+      message: 'Validation failed',
+      errors: errors.array() 
+    });
+  }
+
+  try {
+    // Helper function to convert empty strings to null
+    const nullIfEmpty = (value) => {
+      if (value === undefined || value === null || value === '') {
+        return null;
+      }
+      return value;
+    };
+
+    const {
+      user_id,
+      full_name,
+      email,
+      phone,
+      address,
+      organization,
+      website,
+      social_media
+    } = req.body;
+
+    // Convert empty strings to null for optional fields
+    const sanitizedData = {
+      full_name: nullIfEmpty(full_name),
+      email: nullIfEmpty(email),
+      phone: nullIfEmpty(phone),
+      address: nullIfEmpty(address),
+      organization: nullIfEmpty(organization),
+      website: nullIfEmpty(website),
+      social_media: nullIfEmpty(social_media)
+    };
+
+    await withConnection(async (connection) => {
+      await connection.beginTransaction();
+
+      try {
+        // Check if user exists
+        const [userCheck] = await connection.query(
+          'SELECT id FROM users WHERE id = ?',
+          [user_id]
+        );
+
+        if (userCheck.length === 0) {
+          throw new Error('User not found');
+        }
+
+        // Check if info already exists
+        const [infoCheck] = await connection.query(
+          'SELECT user_id FROM user_other_info WHERE user_id = ?',
+          [user_id]
+        );
+
+        if (infoCheck.length > 0) {
+          // Update existing info
+          await connection.query(
+            `UPDATE user_other_info 
+            SET full_name = ?, email = ?, phone = ?, address = ?, 
+                organization = ?, website = ?, social_media = ?
+            WHERE user_id = ?`,
+            [
+              sanitizedData.full_name,
+              sanitizedData.email,
+              sanitizedData.phone,
+              sanitizedData.address,
+              sanitizedData.organization,
+              sanitizedData.website,
+              sanitizedData.social_media,
+              user_id
+            ]
+          );
+        } else {
+          // Insert new info
+          await connection.query(
+            `INSERT INTO user_other_info 
+            (user_id, full_name, email, phone, address, organization, website, social_media) 
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+            [
+              user_id,
+              sanitizedData.full_name,
+              sanitizedData.email,
+              sanitizedData.phone,
+              sanitizedData.address,
+              sanitizedData.organization,
+              sanitizedData.website,
+              sanitizedData.social_media
+            ]
+          );
+        }
+
+        await connection.commit();
+      } catch (err) {
+        await connection.rollback();
+        throw err;
+      }
+    });
+
+    res.status(201).json({ 
+      success: true,
+      message: 'User info saved successfully'
+    });
+  } catch (err) {
+    const status = err.message === 'User not found' ? 404 : 500;
+    res.status(status).json({ 
+      success: false, 
+      message: err.message,
+      error: process.env.NODE_ENV === 'development' ? err.message : undefined
+    });
+  }
+});
 
 module.exports = router;
