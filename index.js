@@ -56,6 +56,7 @@ app.use('/api/students', authenticate, require('./routes/students'));
 app.use('/api/register', require('./routes/register'));
 app.use('/api/add_activity', authenticate, require('./routes/add_activity'));
 app.use('/api/attendance', require('./routes/attendance'));
+app.use('/api/msw', require('./routes/msw'));
 app.use('/api/users', require('./routes/users'));
 app.use('/api/account', require('./routes/account')); // This will properly mount account routes
 app.use('/api/user_session', require('./routes/user_session'));
