@@ -260,7 +260,7 @@ router.get('/preslist', async (req, res) => {
         cl.municipality,
         cl.barangay
       FROM users u
-      LEFT JOIN cdc c ON u.cdc_id = c.cdc_id
+      LEFT JOIN cdc c ON u.cdc_id = c.cdc_id AND c.status = 'active'
       LEFT JOIN cdc_location cl ON c.location_id = cl.location_id
       WHERE u.type = 'president'
     `;
@@ -359,9 +359,9 @@ router.get('/preslist', async (req, res) => {
 
       const locationId = locationResults.insertId;
 
-      // Insert CDC with name
+      // Insert CDC with name and active status
       const [cdcResults] = await connection.query(
-        `INSERT INTO cdc (location_id, name) VALUES (?, ?)`,
+        `INSERT INTO cdc (location_id, name, status) VALUES (?, ?, 'active')`,
         [locationId, name]
       );
       const newCdcId = cdcResults.insertId;
@@ -402,7 +402,7 @@ router.get('/preslist', async (req, res) => {
       
       // Get the full created CDC data
       const [newCDC] = await connection.query(
-        `SELECT c.cdc_id as cdcId, c.name, cl.Region as region, 
+        `SELECT c.cdc_id as cdcId, c.name, c.status, cl.Region as region, 
                 cl.province, cl.municipality, cl.barangay
         FROM cdc c
         JOIN cdc_location cl ON c.location_id = cl.location_id
@@ -497,6 +497,7 @@ router.get('/preslist', async (req, res) => {
           SELECT 
             c.cdc_id as cdcId,
             c.name,
+            c.status,
             cl.Region as region,
             cl.province,
             cl.municipality,
@@ -507,6 +508,10 @@ router.get('/preslist', async (req, res) => {
         
         const conditions = [];
         const params = [];
+        
+        // Always filter by active status
+        conditions.push('c.status = ?');
+        params.push('active');
         
         // Always filter by user's province and municipality
         conditions.push('cl.province = ?');
@@ -575,6 +580,152 @@ router.get('/preslist', async (req, res) => {
     }
   });
 
+  // Get all CDCs including deactivated ones (for admin purposes)
+  router.get('/all', authenticate, async (req, res) => {
+    const { barangay, status, page = 1, limit = 20 } = req.query;
+    const userId = req.user?.id;
+    
+    if (!userId) {
+      return res.status(401).json({
+        success: false,
+        message: 'User authentication required'
+      });
+    }
+    
+    try {
+      const pageNum = parseInt(page);
+      const limitNum = parseInt(limit);
+      const offset = (pageNum - 1) * limitNum;
+
+      if (isNaN(pageNum) || isNaN(limitNum) || pageNum < 1 || limitNum < 1) {
+        return res.status(400).json({
+          success: false,
+          message: 'Invalid pagination parameters'
+        });
+      }
+
+      let connection;
+      try {
+        connection = await db.promisePool.getConnection();
+
+        // Get user's address to extract province and municipality
+        const [userInfo] = await connection.query(
+          `SELECT address FROM user_other_info WHERE user_id = ?`,
+          [userId]
+        );
+
+        if (!userInfo.length || !userInfo[0].address) {
+          return res.status(400).json({
+            success: false,
+            message: 'User address not found. Please update your profile with address information.'
+          });
+        }
+
+        // Parse address: "Barangay, Municipality, Province, Region"
+        const addressParts = userInfo[0].address.split(',').map(part => part.trim());
+        
+        if (addressParts.length < 3) {
+          return res.status(400).json({
+            success: false,
+            message: 'Invalid address format. Please update your profile with a complete address (Barangay, Municipality, Province, Region).'
+          });
+        }
+
+        // Extract municipality (index 1) and province (index 2)
+        const userMunicipality = addressParts[1];
+        const userProvince = addressParts[2];
+
+        // Base query with all fields including status
+        let query = `
+          SELECT 
+            c.cdc_id as cdcId,
+            c.name,
+            c.status,
+            cl.Region as region,
+            cl.province,
+            cl.municipality,
+            cl.barangay
+          FROM cdc c
+          JOIN cdc_location cl ON c.location_id = cl.location_id
+        `;
+        
+        const conditions = [];
+        const params = [];
+        
+        // Filter by status if provided (active, deactivated, or all)
+        if (status && (status === 'active' || status === 'deactivated')) {
+          conditions.push('c.status = ?');
+          params.push(status);
+        }
+        // If no status filter, show all (both active and deactivated)
+        
+        // Always filter by user's province and municipality
+        conditions.push('cl.province = ?');
+        params.push(userProvince);
+        
+        conditions.push('cl.municipality = ?');
+        params.push(userMunicipality);
+        
+        // Optional barangay filter
+        if (barangay) {
+          conditions.push('cl.barangay = ?');
+          params.push(barangay);
+        }
+        
+        query += ' WHERE ' + conditions.join(' AND ');
+        query += ' ORDER BY c.status, cl.barangay, c.name';
+        
+        // Get total count
+        const countQuery = `
+          SELECT COUNT(*) as total 
+          FROM cdc c
+          JOIN cdc_location cl ON c.location_id = cl.location_id
+          WHERE ${conditions.join(' AND ')}
+        `;
+        
+        const [countResult] = await connection.query(countQuery, params);
+        const total = countResult[0].total;
+
+        // Get paginated results
+        const [results] = await connection.query(
+          query + ` LIMIT ? OFFSET ?`,
+          [...params, limitNum, offset]
+        );
+        
+        res.json({ 
+          success: true,
+          data: results,
+          pagination: {
+            total,
+            page: pageNum,
+            limit: limitNum,
+            totalPages: Math.ceil(total / limitNum)
+          }
+        });
+        
+      } catch (err) {
+        console.error('Database error:', {
+          query: err.sql,
+          message: err.message,
+          stack: process.env.NODE_ENV === 'development' ? err.stack : undefined
+        });
+        res.status(500).json({
+          success: false,
+          message: 'Failed to fetch CDC data',
+          error: process.env.NODE_ENV === 'development' ? err.message : undefined
+        });
+      } finally {
+        if (connection) await connection.release();
+      }
+    } catch (err) {
+      console.error('Unexpected error:', err);
+      res.status(500).json({
+        success: false,
+        message: 'Internal server error'
+      });
+    }
+  });
+
   // Get single CDC by ID
   router.get('/:id', async (req, res) => {
     const { id } = req.params;
@@ -584,7 +735,7 @@ router.get('/preslist', async (req, res) => {
       connection = await db.promisePool.getConnection();
       
       const [results] = await connection.query(
-        `SELECT c.cdc_id as cdcId, c.name, cl.Region as region, 
+        `SELECT c.cdc_id as cdcId, c.name, c.status, cl.Region as region, 
                 cl.province, cl.municipality, cl.barangay
         FROM cdc c
         JOIN cdc_location cl ON c.location_id = cl.location_id
@@ -673,7 +824,7 @@ router.get('/preslist', async (req, res) => {
       
       // Get the updated CDC data
       const [updatedCDC] = await connection.query(
-        `SELECT c.cdc_id as cdcId, c.name, cl.Region as region, 
+        `SELECT c.cdc_id as cdcId, c.name, c.status, cl.Region as region, 
                 cl.province, cl.municipality, cl.barangay
         FROM cdc c
         JOIN cdc_location cl ON c.location_id = cl.location_id
@@ -730,39 +881,31 @@ router.get('/preslist', async (req, res) => {
         });
       }
 
-      const locationId = cdcResults[0].location_id;
-
-      // First, remove CDC association from all users (set cdc_id to NULL)
-      await connection.query(
-        'UPDATE users SET cdc_id = NULL WHERE cdc_id = ?',
+      // Check if CDC is already deactivated
+      const [cdcStatus] = await connection.query(
+        'SELECT status FROM cdc WHERE cdc_id = ?',
         [id]
       );
 
-      // Delete CDC record
-      await connection.query(
-        'DELETE FROM cdc WHERE cdc_id = ?',
-        [id]
-      );
-
-      // Check if there are any other CDCs using this location
-      const [otherCdcs] = await connection.query(
-        'SELECT COUNT(*) as count FROM cdc WHERE location_id = ?',
-        [locationId]
-      );
-
-      // Only delete location if no other CDCs are using it
-      if (otherCdcs[0].count === 0) {
-        await connection.query(
-          'DELETE FROM cdc_location WHERE location_id = ?',
-          [locationId]
-        );
+      if (cdcStatus[0].status === 'deactivated') {
+        await connection.rollback();
+        return res.status(400).json({
+          success: false,
+          message: 'CDC is already deactivated'
+        });
       }
+
+      // Soft delete: Set status to 'deactivated' instead of deleting
+      await connection.query(
+        'UPDATE cdc SET status = ? WHERE cdc_id = ?',
+        ['deactivated', id]
+      );
 
       await connection.commit();
       
       res.json({
         success: true,
-        message: 'CDC deleted successfully'
+        message: 'CDC deactivated successfully'
       });
 
     } catch (err) {
@@ -937,11 +1080,12 @@ router.get('/preslist', async (req, res) => {
       const cdcs = await withConnection(async (connection) => {
         const searchTerm = `%${query}%`;
         const [results] = await connection.query(
-          `SELECT c.cdc_id as cdcId, c.name, cl.Region as region, 
+          `SELECT c.cdc_id as cdcId, c.name, c.status, cl.Region as region, 
                   cl.province, cl.municipality, cl.barangay
           FROM cdc c
           JOIN cdc_location cl ON c.location_id = cl.location_id
-          WHERE c.name LIKE ? OR cl.province LIKE ? OR cl.municipality LIKE ? OR cl.barangay LIKE ?
+          WHERE c.status = 'active' 
+            AND (c.name LIKE ? OR cl.province LIKE ? OR cl.municipality LIKE ? OR cl.barangay LIKE ?)
           LIMIT 20`,
           [searchTerm, searchTerm, searchTerm, searchTerm]
         );
@@ -966,13 +1110,14 @@ router.get('/preslist', async (req, res) => {
         `SELECT 
           c.cdc_id, 
           c.name,
+          c.status,
           l.Region,
           l.province,
           l.municipality,
           l.barangay
         FROM cdc c
         JOIN cdc_location l ON c.location_id = l.location_id
-        WHERE c.name LIKE ?`,
+        WHERE c.status = 'active' AND c.name LIKE ?`,
         [`%${name}%`]
       );
 
