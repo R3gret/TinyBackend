@@ -57,6 +57,8 @@ app.use('/api/register', require('./routes/register'));
 app.use('/api/add_activity', authenticate, require('./routes/add_activity'));
 app.use('/api/attendance', require('./routes/attendance'));
 app.use('/api/msw', require('./routes/msw'));
+app.use('/api/msw-dashboard', require('./routes/msw_dashboard'));
+app.use('/api/focalperson', require('./routes/focalperson'));
 app.use('/api/users', require('./routes/users'));
 app.use('/api/account', require('./routes/account')); // This will properly mount account routes
 app.use('/api/user-info', require('./routes/account')); // Mount account routes at /api/user-info for direct access
