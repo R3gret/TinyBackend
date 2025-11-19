@@ -19,14 +19,17 @@ router.get('/check', async (req, res) => {
     connection = await db.promisePool.getConnection();
 
     // Check if there's already a focal person in this municipality
-    // Check via CDC location (if focal has a CDC)
+    // Check via user_other_info address field (municipality stored in address)
+    // Also check via CDC location for backward compatibility with existing focal persons
     const [existingFocal] = await connection.query(
-      `SELECT u.id, u.username, cl.municipality
+      `SELECT DISTINCT u.id, u.username, COALESCE(cl.municipality, '') as municipality
        FROM users u
+       LEFT JOIN user_other_info o ON u.id = o.user_id
        LEFT JOIN cdc c ON u.cdc_id = c.cdc_id
        LEFT JOIN cdc_location cl ON c.location_id = cl.location_id
-       WHERE u.type = 'focal' AND cl.municipality = ?`,
-      [municipality]
+       WHERE u.type = 'focal' 
+       AND (o.address LIKE ? OR cl.municipality = ?)`,
+      [`%${municipality}%`, municipality]
     );
 
     if (existingFocal.length > 0) {
@@ -61,7 +64,7 @@ router.get('/check', async (req, res) => {
 
 // Create focal account (only one per municipality)
 router.post('/', async (req, res) => {
-  const { username, password, municipality, province, barangay, cdcName } = req.body;
+  const { username, password, municipality, province, barangay } = req.body;
   let connection;
 
   if (!username || !password) {
@@ -101,72 +104,29 @@ router.post('/', async (req, res) => {
       }
 
       // Check if there's already a focal person in this municipality
-      // Check via CDC location (if focal has a CDC)
+      // Check via user_other_info address field (municipality stored in address)
+      // Also check via CDC location for backward compatibility with existing focal persons
       const [existingFocal] = await connection.query(
-        `SELECT u.id, u.username, cl.municipality
+        `SELECT DISTINCT u.id, u.username
          FROM users u
+         LEFT JOIN user_other_info o ON u.id = o.user_id
          LEFT JOIN cdc c ON u.cdc_id = c.cdc_id
          LEFT JOIN cdc_location cl ON c.location_id = cl.location_id
-         WHERE u.type = 'focal' AND cl.municipality = ?`,
-        [municipality]
+         WHERE u.type = 'focal' 
+         AND (o.address LIKE ? OR cl.municipality = ?)`,
+        [`%${municipality}%`, municipality]
       );
 
       if (existingFocal.length > 0) {
         throw new Error(`A focal person already exists in the municipality: ${municipality}. Only one focal person is allowed per municipality.`);
       }
 
-      // Find or create CDC for this municipality
-      // First, try to find an existing CDC in this municipality
-      let cdcId = null;
-      if (cdcName) {
-        const [existingCDC] = await connection.query(
-          `SELECT c.cdc_id 
-           FROM cdc c
-           JOIN cdc_location cl ON c.location_id = cl.location_id
-           WHERE c.name = ? AND cl.municipality = ?`,
-          [cdcName, municipality]
-        );
-        
-        if (existingCDC.length > 0) {
-          cdcId = existingCDC[0].cdc_id;
-        }
-      }
-
-      // If no CDC found, create a new one for the focal person
-      if (!cdcId) {
-        // Check if location exists
-        let locationId = null;
-        const [existingLocation] = await connection.query(
-          `SELECT location_id FROM cdc_location 
-           WHERE municipality = ? ${province ? 'AND province = ?' : ''} ${barangay ? 'AND barangay = ?' : ''}`,
-          [municipality, ...(province ? [province] : []), ...(barangay ? [barangay] : [])]
-        );
-
-        if (existingLocation.length > 0) {
-          locationId = existingLocation[0].location_id;
-        } else {
-          // Create new location
-          const [locationResult] = await connection.query(
-            `INSERT INTO cdc_location (province, municipality, barangay) VALUES (?, ?, ?)`,
-            [province || null, municipality, barangay || null]
-          );
-          locationId = locationResult.insertId;
-        }
-
-        // Create CDC for focal person
-        const [cdcResult] = await connection.query(
-          `INSERT INTO cdc (location_id, name) VALUES (?, ?)`,
-          [locationId, cdcName || `Focal Person - ${municipality}`]
-        );
-        cdcId = cdcResult.insertId;
-      }
-
       // Hash password and create user
       const hashedPassword = await bcrypt.hash(password, 10);
 
       const [result] = await connection.query(
-        'INSERT INTO users (username, password, type, cdc_id) VALUES (?, ?, ?, ?)',
-        [username, hashedPassword, 'focal', cdcId]
+        'INSERT INTO users (username, password, type) VALUES (?, ?, ?)',
+        [username, hashedPassword, 'focal']
       );
 
       await connection.commit();
@@ -177,7 +137,6 @@ router.post('/', async (req, res) => {
         username,
         type: 'focal',
         municipality,
-        cdc_id: cdcId,
         message: 'Focal person account created successfully'
       });
     } catch (err) {
