@@ -3,6 +3,7 @@
   const db = require('../db');
   const { body, validationResult } = require('express-validator');
   const bcrypt = require('bcryptjs');
+  const authenticate = require('./authMiddleware');
 
   // Enhanced database error handler
   const handleDatabaseError = (err, res) => {
@@ -436,8 +437,17 @@ router.get('/preslist', async (req, res) => {
   });
 
   // Get all CDCs with filtering and pagination
-  router.get('/', async (req, res) => {
-    const { province, municipality, barangay, page = 1, limit = 20 } = req.query;
+  // Automatically filters by user's province and municipality from their profile
+  router.get('/', authenticate, async (req, res) => {
+    const { barangay, page = 1, limit = 20 } = req.query;
+    const userId = req.user?.id;
+    
+    if (!userId) {
+      return res.status(401).json({
+        success: false,
+        message: 'User authentication required'
+      });
+    }
     
     try {
       const pageNum = parseInt(page);
@@ -455,6 +465,33 @@ router.get('/preslist', async (req, res) => {
       try {
         connection = await db.promisePool.getConnection();
 
+        // Get user's address to extract province and municipality
+        const [userInfo] = await connection.query(
+          `SELECT address FROM user_other_info WHERE user_id = ?`,
+          [userId]
+        );
+
+        if (!userInfo.length || !userInfo[0].address) {
+          return res.status(400).json({
+            success: false,
+            message: 'User address not found. Please update your profile with address information.'
+          });
+        }
+
+        // Parse address: "Barangay, Municipality, Province, Region"
+        const addressParts = userInfo[0].address.split(',').map(part => part.trim());
+        
+        if (addressParts.length < 3) {
+          return res.status(400).json({
+            success: false,
+            message: 'Invalid address format. Please update your profile with a complete address (Barangay, Municipality, Province, Region).'
+          });
+        }
+
+        // Extract municipality (index 1) and province (index 2)
+        const userMunicipality = addressParts[1];
+        const userProvince = addressParts[2];
+
         // Base query with all fields
         let query = `
           SELECT 
@@ -471,34 +508,28 @@ router.get('/preslist', async (req, res) => {
         const conditions = [];
         const params = [];
         
-        // Add filters if provided
-        if (province) {
-          conditions.push('cl.province LIKE ?');
-          params.push(`%${province}%`);
-        }
+        // Always filter by user's province and municipality
+        conditions.push('cl.province = ?');
+        params.push(userProvince);
         
-        if (municipality) {
-          conditions.push('cl.municipality LIKE ?');
-          params.push(`%${municipality}%`);
-        }
+        conditions.push('cl.municipality = ?');
+        params.push(userMunicipality);
         
+        // Optional barangay filter
         if (barangay) {
-          conditions.push('cl.barangay LIKE ?');
-          params.push(`%${barangay}%`);
+          conditions.push('cl.barangay = ?');
+          params.push(barangay);
         }
         
-        if (conditions.length > 0) {
-          query += ' WHERE ' + conditions.join(' AND ');
-        }
+        query += ' WHERE ' + conditions.join(' AND ');
+        query += ' ORDER BY cl.barangay, c.name';
         
-        query += ' ORDER BY cl.province, cl.municipality, cl.barangay';
-        
-        // Get total count (optimized version)
+        // Get total count
         const countQuery = `
           SELECT COUNT(*) as total 
           FROM cdc c
           JOIN cdc_location cl ON c.location_id = cl.location_id
-          ${conditions.length > 0 ? 'WHERE ' + conditions.join(' AND ') : ''}
+          WHERE ${conditions.join(' AND ')}
         `;
         
         const [countResult] = await connection.query(countQuery, params);
