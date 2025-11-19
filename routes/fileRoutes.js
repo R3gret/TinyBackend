@@ -24,8 +24,9 @@ const upload = multer({ storage });
 // --- Specific Routes First ---
 
 // GET /api/files/counts - Returns file counts per category for a specific age group
+// Query param: scope - 'all' (only available to all), 'cdc' (only user's CDC), 'both' (default, both)
 router.get('/counts', async (req, res) => {
-  const { age_group_id } = req.query;
+  const { age_group_id, scope = 'both' } = req.query;
   const { cdc_id: userCdcId } = req.user || {};
 
   if (!age_group_id) {
@@ -39,10 +40,11 @@ router.get('/counts', async (req, res) => {
   try {
     connection = await db.promisePool.getConnection();
 
-    // If userCdcId is null, show only files available to all (cdc_id IS NULL)
-    // If userCdcId is provided, show files available to all OR belonging to that CDC
+    // Build query based on scope parameter
     let query, params;
-    if (!userCdcId) {
+    
+    if (scope === 'all') {
+      // Only files available to all
       query = `
         SELECT f.category_id, COUNT(*) as count 
         FROM files f
@@ -50,14 +52,40 @@ router.get('/counts', async (req, res) => {
         GROUP BY f.category_id
       `;
       params = [age_group_id];
-    } else {
+    } else if (scope === 'cdc' && userCdcId) {
+      // Only files for user's CDC
       query = `
         SELECT f.category_id, COUNT(*) as count 
         FROM files f
-        WHERE f.age_group_id = ? AND (f.cdc_id IS NULL OR f.cdc_id = ?)
+        WHERE f.age_group_id = ? AND f.cdc_id = ?
         GROUP BY f.category_id
       `;
       params = [age_group_id, userCdcId];
+    } else if (scope === 'cdc' && !userCdcId) {
+      // User has no CDC, so no CDC-specific files
+      return res.json({
+        success: true,
+        counts: {}
+      });
+    } else {
+      // Default: both (available to all OR user's CDC)
+      if (!userCdcId) {
+        query = `
+          SELECT f.category_id, COUNT(*) as count 
+          FROM files f
+          WHERE f.age_group_id = ? AND f.cdc_id IS NULL
+          GROUP BY f.category_id
+        `;
+        params = [age_group_id];
+      } else {
+        query = `
+          SELECT f.category_id, COUNT(*) as count 
+          FROM files f
+          WHERE f.age_group_id = ? AND (f.cdc_id IS NULL OR f.cdc_id = ?)
+          GROUP BY f.category_id
+        `;
+        params = [age_group_id, userCdcId];
+      }
     }
 
     const [results] = await connection.query(query, params);
@@ -110,24 +138,42 @@ router.get('/get-age-groups', async (req, res) => {
   }
 });
 
-// GET /api/files/get-categories - Returns all categories available to all (cdc_id IS NULL) or for the user's CDC
+// GET /api/files/get-categories - Returns categories based on scope
+// Query param: scope - 'all' (only available to all), 'cdc' (only user's CDC), 'both' (default, both)
 router.get('/get-categories', async (req, res) => {
   const { cdc_id: userCdcId } = req.user || {};
-  const { age_group_id } = req.query; // Get age_group_id from query params
+  const { age_group_id, scope = 'both' } = req.query;
   let connection;
 
   try {
     connection = await db.promisePool.getConnection();
     
-    // If userCdcId is null, show only categories available to all (cdc_id IS NULL)
-    // If userCdcId is provided, show categories available to all OR belonging to that CDC
+    // Build query based on scope parameter
     let query, params;
-    if (!userCdcId) {
+    
+    if (scope === 'all') {
+      // Only categories available to all
       query = 'SELECT * FROM domain_file_categories WHERE cdc_id IS NULL';
       params = [];
-    } else {
-      query = 'SELECT * FROM domain_file_categories WHERE cdc_id IS NULL OR cdc_id = ?';
+    } else if (scope === 'cdc' && userCdcId) {
+      // Only categories for user's CDC
+      query = 'SELECT * FROM domain_file_categories WHERE cdc_id = ?';
       params = [userCdcId];
+    } else if (scope === 'cdc' && !userCdcId) {
+      // User has no CDC, so no CDC-specific categories
+      return res.json({
+        success: true,
+        categories: []
+      });
+    } else {
+      // Default: both (available to all OR user's CDC)
+      if (!userCdcId) {
+        query = 'SELECT * FROM domain_file_categories WHERE cdc_id IS NULL';
+        params = [];
+      } else {
+        query = 'SELECT * FROM domain_file_categories WHERE cdc_id IS NULL OR cdc_id = ?';
+        params = [userCdcId];
+      }
     }
 
     // If age_group_id is provided, add it to the filter
@@ -153,14 +199,11 @@ router.get('/get-categories', async (req, res) => {
   }
 });
 
-// POST /api/files/categories - Create a new category for the user's CDC
+// POST /api/files/categories - Create a new category (available to all if cdc_id is null, or for user's CDC)
 router.post('/categories', async (req, res) => {
   const { category_name, age_group_id } = req.body;
-  const { cdc_id: userCdcId } = req.user;
+  const { cdc_id: userCdcId } = req.user || {};
 
-  if (!userCdcId) {
-    return res.status(403).json({ success: false, message: 'User must be associated with a CDC to create a category.' });
-  }
   if (!category_name || !age_group_id) {
     return res.status(400).json({ success: false, message: 'Category name and age_group_id are required' });
   }
@@ -168,14 +211,16 @@ router.post('/categories', async (req, res) => {
   let connection;
   try {
     connection = await db.promisePool.getConnection();
+    // If userCdcId is null, create category available to all (cdc_id = NULL)
+    // If userCdcId is provided, create category for that CDC
     const [result] = await connection.query(
       'INSERT INTO domain_file_categories (category_name, cdc_id, age_group_id) VALUES (?, ?, ?)',
-      [category_name, userCdcId, age_group_id]
+      [category_name, userCdcId || null, age_group_id]
     );
     res.status(201).json({
       success: true,
       message: 'Category created successfully',
-      category: { category_id: result.insertId, category_name, cdc_id: userCdcId, age_group_id }
+      category: { category_id: result.insertId, category_name, cdc_id: userCdcId || null, age_group_id }
     });
   } catch (err) {
     console.error('Database query error:', err);
@@ -192,15 +237,12 @@ router.post('/categories', async (req, res) => {
   }
 });
 
-// PUT /api/files/categories/:id - Update a category within the user's CDC
+// PUT /api/files/categories/:id - Update a category (available to all or within user's CDC)
 router.put('/categories/:id', async (req, res) => {
   const { id } = req.params;
   const { category_name } = req.body;
-  const { cdc_id: userCdcId } = req.user;
+  const { cdc_id: userCdcId } = req.user || {};
 
-  if (!userCdcId) {
-    return res.status(403).json({ success: false, message: 'User is not associated with a CDC. Access denied.' });
-  }
   if (!category_name) {
     return res.status(400).json({ success: false, message: 'Category name is required' });
   }
@@ -208,13 +250,22 @@ router.put('/categories/:id', async (req, res) => {
   let connection;
   try {
     connection = await db.promisePool.getConnection();
-    const [result] = await connection.query(
-      'UPDATE domain_file_categories SET category_name = ? WHERE category_id = ? AND cdc_id = ?',
-      [category_name, id, userCdcId]
-    );
+    
+    // If userCdcId is null, allow updating only categories available to all (cdc_id IS NULL)
+    // If userCdcId is provided, allow updating categories available to all OR belonging to that CDC
+    let query, params;
+    if (!userCdcId) {
+      query = 'UPDATE domain_file_categories SET category_name = ? WHERE category_id = ? AND cdc_id IS NULL';
+      params = [category_name, id];
+    } else {
+      query = 'UPDATE domain_file_categories SET category_name = ? WHERE category_id = ? AND (cdc_id IS NULL OR cdc_id = ?)';
+      params = [category_name, id, userCdcId];
+    }
+    
+    const [result] = await connection.query(query, params);
 
     if (result.affectedRows === 0) {
-      return res.status(404).json({ success: false, message: 'Category not found or not owned by your CDC' });
+      return res.status(404).json({ success: false, message: 'Category not found or you do not have permission to update it' });
     }
 
     res.json({
@@ -235,25 +286,30 @@ router.put('/categories/:id', async (req, res) => {
   }
 });
 
-// DELETE /api/files/categories/:id - Delete a category within the user's CDC
+// DELETE /api/files/categories/:id - Delete a category (available to all or within user's CDC)
 router.delete('/categories/:id', async (req, res) => {
   const { id } = req.params;
-  const { cdc_id: userCdcId } = req.user;
-
-  if (!userCdcId) {
-    return res.status(403).json({ success: false, message: 'User is not associated with a CDC. Access denied.' });
-  }
+  const { cdc_id: userCdcId } = req.user || {};
 
   let connection;
   try {
     connection = await db.promisePool.getConnection();
-    const [result] = await connection.query(
-      'DELETE FROM domain_file_categories WHERE category_id = ? AND cdc_id = ?',
-      [id, userCdcId]
-    );
+    
+    // If userCdcId is null, allow deleting only categories available to all (cdc_id IS NULL)
+    // If userCdcId is provided, allow deleting categories available to all OR belonging to that CDC
+    let query, params;
+    if (!userCdcId) {
+      query = 'DELETE FROM domain_file_categories WHERE category_id = ? AND cdc_id IS NULL';
+      params = [id];
+    } else {
+      query = 'DELETE FROM domain_file_categories WHERE category_id = ? AND (cdc_id IS NULL OR cdc_id = ?)';
+      params = [id, userCdcId];
+    }
+    
+    const [result] = await connection.query(query, params);
 
     if (result.affectedRows === 0) {
-      return res.status(404).json({ success: false, message: 'Category not found or not owned by your CDC' });
+      return res.status(404).json({ success: false, message: 'Category not found or you do not have permission to delete it' });
     }
 
     res.json({
@@ -348,11 +404,11 @@ router.get('/download/:fileId', async (req, res) => {
 
 // --- Generic Routes Last ---
 
-// POST /api/files - Handles file uploads
+// POST /api/files - Handles file uploads (available to all if cdc_id is null, or for user's CDC)
 router.post('/', upload.single('file_data'), async (req, res) => {
   const { category_id, age_group_id, file_name } = req.body;
   const file = req.file;
-  const { id: userId, cdc_id: userCdcId } = req.user;
+  const { id: userId, cdc_id: userCdcId } = req.user || {};
 
   if (!category_id || !age_group_id || !file_name || !file) {
     if (file) fs.unlinkSync(file.path); // Clean up orphaned file
@@ -362,19 +418,20 @@ router.post('/', upload.single('file_data'), async (req, res) => {
     });
   }
 
+  if (!userId) {
+    if (file) fs.unlinkSync(file.path); // Clean up orphaned file
+    return res.status(401).json({ 
+      success: false, 
+      message: 'User authentication required' 
+    });
+  }
+
   let connection;
   try {
     connection = await db.promisePool.getConnection();
 
-    // For file uploads, the user must be associated with a CDC
-    if (!userCdcId) {
-        fs.unlinkSync(file.path); // Clean up orphaned file
-        return res.status(403).json({
-            success: false,
-            message: 'User must be associated with a CDC to upload files.'
-        });
-    }
-
+    // If userCdcId is null, upload file available to all (cdc_id = NULL)
+    // If userCdcId is provided, upload file for that CDC
     const [result] = await connection.query(
       `INSERT INTO files 
       (category_id, age_group_id, file_name, file_type, file_path, cdc_id, id) 
@@ -385,7 +442,7 @@ router.post('/', upload.single('file_data'), async (req, res) => {
         file_name, 
         file.mimetype, 
         file.path,
-        userCdcId,
+        userCdcId || null,
         userId
       ]
     );
@@ -408,26 +465,32 @@ router.post('/', upload.single('file_data'), async (req, res) => {
   }
 });
 
-// PUT /api/files/:id - Rename a file
+// PUT /api/files/:id - Rename a file (available to all or within user's CDC)
 router.put('/:id', async (req, res) => {
   const { id: fileId } = req.params;
   const { file_name } = req.body;
-  const { cdc_id: userCdcId } = req.user;
+  const { cdc_id: userCdcId } = req.user || {};
 
   if (!file_name) {
     return res.status(400).json({ success: false, message: 'New file name is required' });
-  }
-  if (!userCdcId) {
-    return res.status(403).json({ success: false, message: 'User is not associated with a CDC. Access denied.' });
   }
 
   let connection;
   try {
     connection = await db.promisePool.getConnection();
-    const [result] = await connection.query(
-      'UPDATE files SET file_name = ? WHERE file_id = ? AND cdc_id = ?',
-      [file_name, fileId, userCdcId]
-    );
+    
+    // If userCdcId is null, allow updating only files available to all (cdc_id IS NULL)
+    // If userCdcId is provided, allow updating files available to all OR belonging to that CDC
+    let query, params;
+    if (!userCdcId) {
+      query = 'UPDATE files SET file_name = ? WHERE file_id = ? AND cdc_id IS NULL';
+      params = [file_name, fileId];
+    } else {
+      query = 'UPDATE files SET file_name = ? WHERE file_id = ? AND (cdc_id IS NULL OR cdc_id = ?)';
+      params = [file_name, fileId, userCdcId];
+    }
+    
+    const [result] = await connection.query(query, params);
 
     if (result.affectedRows === 0) {
       return res.status(404).json({ success: false, message: 'File not found or you do not have permission to edit it.' });
@@ -445,25 +508,33 @@ router.put('/:id', async (req, res) => {
   }
 });
 
-// DELETE /api/files/:id - Delete a file
+// DELETE /api/files/:id - Delete a file (available to all or within user's CDC)
 router.delete('/:id', async (req, res) => {
   const { id: fileId } = req.params;
-  const { cdc_id: userCdcId } = req.user;
-
-  if (!userCdcId) {
-    return res.status(403).json({ success: false, message: 'User is not associated with a CDC. Access denied.' });
-  }
+  const { cdc_id: userCdcId } = req.user || {};
 
   let connection;
   try {
     connection = await db.promisePool.getConnection();
     await connection.beginTransaction();
 
+    // If userCdcId is null, allow deleting only files available to all (cdc_id IS NULL)
+    // If userCdcId is provided, allow deleting files available to all OR belonging to that CDC
+    let selectQuery, selectParams, deleteQuery, deleteParams;
+    if (!userCdcId) {
+      selectQuery = 'SELECT file_path FROM files WHERE file_id = ? AND cdc_id IS NULL';
+      selectParams = [fileId];
+      deleteQuery = 'DELETE FROM files WHERE file_id = ? AND cdc_id IS NULL';
+      deleteParams = [fileId];
+    } else {
+      selectQuery = 'SELECT file_path FROM files WHERE file_id = ? AND (cdc_id IS NULL OR cdc_id = ?)';
+      selectParams = [fileId, userCdcId];
+      deleteQuery = 'DELETE FROM files WHERE file_id = ? AND (cdc_id IS NULL OR cdc_id = ?)';
+      deleteParams = [fileId, userCdcId];
+    }
+
     // First, get the file path before deleting the record
-    const [files] = await connection.query(
-      'SELECT file_path FROM files WHERE file_id = ? AND cdc_id = ?',
-      [fileId, userCdcId]
-    );
+    const [files] = await connection.query(selectQuery, selectParams);
 
     if (files.length === 0) {
       await connection.rollback();
@@ -473,10 +544,7 @@ router.delete('/:id', async (req, res) => {
     const filePath = files[0].file_path;
 
     // Next, delete the database record
-    const [result] = await connection.query(
-      'DELETE FROM files WHERE file_id = ? AND cdc_id = ?',
-      [fileId, userCdcId]
-    );
+    const [result] = await connection.query(deleteQuery, deleteParams);
 
     if (result.affectedRows > 0 && filePath && fs.existsSync(filePath)) {
       // Finally, delete the physical file from the server
@@ -504,22 +572,41 @@ router.delete('/:id', async (req, res) => {
 });
 
 // GET /api/files - This must be the last GET route
+// Query param: scope - 'all' (only available to all), 'cdc' (only user's CDC), 'both' (default, both)
 router.get('/', async (req, res) => {
   const { cdc_id: userCdcId } = req.user || {};
+  const { scope = 'both' } = req.query;
   let connection;
 
   try {
     connection = await db.promisePool.getConnection();
     
-    // If userCdcId is null, show only files available to all (cdc_id IS NULL)
-    // If userCdcId is provided, show files available to all OR belonging to that CDC
+    // Build query based on scope parameter
     let query, params;
-    if (!userCdcId) {
+    
+    if (scope === 'all') {
+      // Only files available to all
       query = 'SELECT * FROM files WHERE cdc_id IS NULL';
       params = [];
-    } else {
-      query = 'SELECT * FROM files WHERE cdc_id IS NULL OR cdc_id = ?';
+    } else if (scope === 'cdc' && userCdcId) {
+      // Only files for user's CDC
+      query = 'SELECT * FROM files WHERE cdc_id = ?';
       params = [userCdcId];
+    } else if (scope === 'cdc' && !userCdcId) {
+      // User has no CDC, so no CDC-specific files
+      return res.json({
+        success: true,
+        files: []
+      });
+    } else {
+      // Default: both (available to all OR user's CDC)
+      if (!userCdcId) {
+        query = 'SELECT * FROM files WHERE cdc_id IS NULL';
+        params = [];
+      } else {
+        query = 'SELECT * FROM files WHERE cdc_id IS NULL OR cdc_id = ?';
+        params = [userCdcId];
+      }
     }
     
     const [results] = await connection.query(query, params);
