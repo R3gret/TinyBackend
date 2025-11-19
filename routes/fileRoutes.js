@@ -26,7 +26,7 @@ const upload = multer({ storage });
 // GET /api/files/counts - Returns file counts per category for a specific age group
 router.get('/counts', async (req, res) => {
   const { age_group_id } = req.query;
-  const { cdc_id: userCdcId } = req.user;
+  const { cdc_id: userCdcId } = req.user || {};
 
   if (!age_group_id) {
     return res.status(400).json({
@@ -39,21 +39,26 @@ router.get('/counts', async (req, res) => {
   try {
     connection = await db.promisePool.getConnection();
 
+    // If userCdcId is null, show only files available to all (cdc_id IS NULL)
+    // If userCdcId is provided, show files available to all OR belonging to that CDC
+    let query, params;
     if (!userCdcId) {
-      return res.status(403).json({
-        success: false,
-        message: 'User is not associated with a CDC. Access denied.'
-      });
+      query = `
+        SELECT f.category_id, COUNT(*) as count 
+        FROM files f
+        WHERE f.age_group_id = ? AND f.cdc_id IS NULL
+        GROUP BY f.category_id
+      `;
+      params = [age_group_id];
+    } else {
+      query = `
+        SELECT f.category_id, COUNT(*) as count 
+        FROM files f
+        WHERE f.age_group_id = ? AND (f.cdc_id IS NULL OR f.cdc_id = ?)
+        GROUP BY f.category_id
+      `;
+      params = [age_group_id, userCdcId];
     }
-
-    const query = `
-      SELECT f.category_id, COUNT(*) as count 
-      FROM files f
-      JOIN users u ON f.id = u.id
-      WHERE f.age_group_id = ? AND u.cdc_id = ?
-      GROUP BY f.category_id
-    `;
-    const params = [age_group_id, userCdcId];
 
     const [results] = await connection.query(query, params);
 
@@ -105,21 +110,25 @@ router.get('/get-age-groups', async (req, res) => {
   }
 });
 
-// GET /api/files/get-categories - Returns all categories for the user's CDC, optionally filtered by age_group_id
+// GET /api/files/get-categories - Returns all categories available to all (cdc_id IS NULL) or for the user's CDC
 router.get('/get-categories', async (req, res) => {
-  const { cdc_id: userCdcId } = req.user;
+  const { cdc_id: userCdcId } = req.user || {};
   const { age_group_id } = req.query; // Get age_group_id from query params
   let connection;
-
-  if (!userCdcId) {
-    return res.status(403).json({ success: false, message: 'User is not associated with a CDC. Access denied.' });
-  }
 
   try {
     connection = await db.promisePool.getConnection();
     
-    let query = 'SELECT * FROM domain_file_categories WHERE cdc_id = ?';
-    const params = [userCdcId];
+    // If userCdcId is null, show only categories available to all (cdc_id IS NULL)
+    // If userCdcId is provided, show categories available to all OR belonging to that CDC
+    let query, params;
+    if (!userCdcId) {
+      query = 'SELECT * FROM domain_file_categories WHERE cdc_id IS NULL';
+      params = [];
+    } else {
+      query = 'SELECT * FROM domain_file_categories WHERE cdc_id IS NULL OR cdc_id = ?';
+      params = [userCdcId];
+    }
 
     // If age_group_id is provided, add it to the filter
     if (age_group_id) {
@@ -269,26 +278,30 @@ router.delete('/categories/:id', async (req, res) => {
 // GET /api/files/download/:fileId - Handles file downloads
 router.get('/download/:fileId', async (req, res) => {
   const { fileId } = req.params;
-  const { cdc_id: userCdcId } = req.user;
+  const { cdc_id: userCdcId } = req.user || {};
 
   let connection;
   try {
     connection = await db.promisePool.getConnection();
 
+    // If userCdcId is null, allow downloading only files available to all (cdc_id IS NULL)
+    // If userCdcId is provided, allow downloading files available to all OR belonging to that CDC
+    let query, params;
     if (!userCdcId) {
-      return res.status(403).json({
-        success: false,
-        message: 'User is not associated with a CDC. Access denied.'
-      });
+      query = `
+        SELECT f.file_name, f.file_type, f.file_path 
+        FROM files f
+        WHERE f.file_id = ? AND f.cdc_id IS NULL
+      `;
+      params = [fileId];
+    } else {
+      query = `
+        SELECT f.file_name, f.file_type, f.file_path 
+        FROM files f
+        WHERE f.file_id = ? AND (f.cdc_id IS NULL OR f.cdc_id = ?)
+      `;
+      params = [fileId, userCdcId];
     }
-
-    const query = `
-      SELECT f.file_name, f.file_type, f.file_path 
-      FROM files f
-      JOIN users u ON f.id = u.id
-      WHERE f.file_id = ? AND u.cdc_id = ?
-    `;
-    const params = [fileId, userCdcId];
 
     const [results] = await connection.query(query, params);
 
@@ -492,16 +505,24 @@ router.delete('/:id', async (req, res) => {
 
 // GET /api/files - This must be the last GET route
 router.get('/', async (req, res) => {
-  const { cdc_id: userCdcId } = req.user;
+  const { cdc_id: userCdcId } = req.user || {};
   let connection;
-
-  if (!userCdcId) {
-    return res.status(403).json({ success: false, message: 'User is not associated with a CDC. Access denied.' });
-  }
 
   try {
     connection = await db.promisePool.getConnection();
-    const [results] = await connection.query('SELECT * FROM files WHERE cdc_id = ?', [userCdcId]);
+    
+    // If userCdcId is null, show only files available to all (cdc_id IS NULL)
+    // If userCdcId is provided, show files available to all OR belonging to that CDC
+    let query, params;
+    if (!userCdcId) {
+      query = 'SELECT * FROM files WHERE cdc_id IS NULL';
+      params = [];
+    } else {
+      query = 'SELECT * FROM files WHERE cdc_id IS NULL OR cdc_id = ?';
+      params = [userCdcId];
+    }
+    
+    const [results] = await connection.query(query, params);
     
     return res.json({
       success: true,
