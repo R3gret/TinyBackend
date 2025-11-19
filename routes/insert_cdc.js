@@ -732,17 +732,31 @@ router.get('/preslist', async (req, res) => {
 
       const locationId = cdcResults[0].location_id;
 
+      // First, remove CDC association from all users (set cdc_id to NULL)
+      await connection.query(
+        'UPDATE users SET cdc_id = NULL WHERE cdc_id = ?',
+        [id]
+      );
+
       // Delete CDC record
       await connection.query(
         'DELETE FROM cdc WHERE cdc_id = ?',
         [id]
       );
 
-      // Delete location record
-      await connection.query(
-        'DELETE FROM cdc_location WHERE location_id = ?',
+      // Check if there are any other CDCs using this location
+      const [otherCdcs] = await connection.query(
+        'SELECT COUNT(*) as count FROM cdc WHERE location_id = ?',
         [locationId]
       );
+
+      // Only delete location if no other CDCs are using it
+      if (otherCdcs[0].count === 0) {
+        await connection.query(
+          'DELETE FROM cdc_location WHERE location_id = ?',
+          [locationId]
+        );
+      }
 
       await connection.commit();
       
