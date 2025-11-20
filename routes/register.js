@@ -7,6 +7,7 @@ router.post('/', authenticate, async (req, res) => {
   const {
     childFirstName, childLastName, childMiddleName, childGender, childAddress, childBirthday,
     childFirstLanguage, childSecondLanguage,
+    childFourPsId, childDisability, childHeightCm, childWeightKg, childBirthplace,
     guardianName, guardianRelationship, guardianEmail, guardianPhone, guardianAddress,
     motherName, motherOccupation, motherAddress, motherContactHome, motherContactWork,
     fatherName, fatherOccupation, fatherAddress, fatherContactHome, fatherContactWork,
@@ -28,8 +29,8 @@ router.post('/', authenticate, async (req, res) => {
 
     // Step 1: Insert into students
     const studentQuery = `INSERT INTO students 
-      (first_name, middle_name, last_name, birthdate, gender, cdc_id, enrolled_at) 
-      VALUES (?, ?, ?, ?, ?, ?, ?)`;
+      (first_name, middle_name, last_name, birthdate, gender, cdc_id, enrolled_at, four_ps_id, disability, height_cm, weight_kg, birthplace) 
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`;
     
     const [studentResults] = await connection.query(studentQuery, [
       childFirstName, 
@@ -38,7 +39,12 @@ router.post('/', authenticate, async (req, res) => {
       childBirthday, 
       childGender,
       cdc_id,
-      enrolled_at
+      enrolled_at,
+      childFourPsId || null,
+      childDisability ? childDisability.toUpperCase() === 'Y' ? 'Y' : 'N' : 'N',
+      childHeightCm || null,
+      childWeightKg || null,
+      childBirthplace || null
     ]);
 
     const studentId = studentResults.insertId;
