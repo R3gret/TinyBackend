@@ -288,15 +288,15 @@ function generatePDF(res, data) {
   const usableWidth = pageWidth - (margin * 2);
   const usableHeight = pageHeight - (margin * 2);
   
-  // Scale factor to fit content on one page
-  const scaleX = usableWidth / 750; // Approximate Excel width
-  const scaleY = usableHeight / 580; // Approximate Excel height
-  const scale = Math.min(scaleX, scaleY);
+  // Scale factor to fit content on one page - adjusted for better fit
+  const scaleX = usableWidth / 750;
+  const scaleY = usableHeight / 600;
+  const scale = Math.min(scaleX, scaleY, 0.75); // Cap scale to prevent too small text
 
   let yPos = margin;
-  const lineHeight = 12 * scale;
-  const fontSize = 10 * scale;
-  const smallFontSize = 8 * scale;
+  const lineHeight = 11;
+  const fontSize = 11;
+  const smallFontSize = 9;
 
   // Helper to format date
   const formatDateForCsv = (dateStr) => {
@@ -324,21 +324,24 @@ function generatePDF(res, data) {
     return upper === 'Y' || upper === 'YES' ? 'Y' : upper === 'N' || upper === 'NO' ? 'N' : defaultValue;
   };
 
-  // Images
+  // Images - positioned to align with header text
   const image1Path = path.join(__dirname, '..', 'image.png');
   const image2Path = path.join(__dirname, '..', 'image1.png');
-  const imageHeight = 40 * scale;
-  const imageY = yPos + 10;
+  const image1Height = 50 * scale; // image.png height
+  const image2Height = 75 * scale; // image1.png height (larger)
+  const imageY = yPos + 5; // Start images slightly higher
+  const image1Y = imageY; // image.png Y position
+  const image2Y = imageY - 8; // image1.png moved upwards
 
   if (fs.existsSync(image1Path)) {
-    doc.image(image1Path, margin + 50, imageY, { width: 60 * scale, height: imageHeight });
+    doc.image(image1Path, margin + 50, image1Y, { width: 70 * scale, height: image1Height });
   }
   if (fs.existsSync(image2Path)) {
-    doc.image(image2Path, margin + 200, imageY, { width: 90 * scale, height: imageHeight * 1.5 });
+    doc.image(image2Path, margin + 200, image2Y, { width: 100 * scale, height: image2Height });
   }
 
-  // Header text (centered)
-  yPos += 15 * scale;
+  // Header text (centered) - align with images
+  yPos += 20 * scale;
   doc.fontSize(fontSize)
      .text('Republic of the Philippines', pageWidth / 2, yPos, { align: 'center' });
   yPos += lineHeight;
@@ -372,26 +375,26 @@ function generatePDF(res, data) {
 
   // Title
   doc.font('Helvetica-Bold')
-     .fontSize(16 * scale)
+     .fontSize(18)
      .text('MASTERLIST OF DAYCARE CHILDREN', pageWidth / 2, yPos, { align: 'center' });
 
-  yPos += lineHeight * 2;
+  yPos += lineHeight * 1.5;
 
-  // Table headers
+  // Table headers - match Excel column structure
   const colWidths = [
-    20 * scale,  // No.
-    80 * scale,  // Name
-    25 * scale,  // Sex
+    25 * scale,  // No.
+    100 * scale, // NAME OF CHILD (merged)
+    30 * scale,  // SEX
     50 * scale,  // 4ps ID
-    30 * scale,  // Disability
-    50 * scale,  // Birthdate
-    40 * scale,  // Age
-    30 * scale,  // Height
-    30 * scale,  // Weight
-    50 * scale,  // Birthplace
-    60 * scale,  // Address
-    70 * scale,  // Guardian
-    40 * scale   // Contact
+    35 * scale,  // DISABILITY
+    60 * scale,  // BIRTHDATE
+    35 * scale,  // AGE
+    35 * scale,  // HEIGHT
+    35 * scale,  // WEIGHT
+    60 * scale,  // BIRTHPLACE
+    80 * scale,  // ADDRESS
+    90 * scale,  // GUARDIAN (merged)
+    50 * scale   // CONTACT
   ];
   let xPos = margin;
 
@@ -400,87 +403,204 @@ function generatePDF(res, data) {
      .font('Helvetica-Bold')
      .fillColor('black');
 
+  // Draw header row with borders
+  const headerY = yPos;
   headers.forEach((header, i) => {
-    doc.text(header, xPos, yPos, { width: colWidths[i], align: 'center' });
+    // Draw cell border
+    doc.rect(xPos, headerY, colWidths[i], lineHeight * 1.2)
+       .stroke();
+    // Add text
+    doc.text(header, xPos + 2, headerY + 3, { width: colWidths[i] - 4, align: 'center' });
     xPos += colWidths[i];
   });
 
-  yPos += lineHeight * 1.5;
+  yPos += lineHeight * 1.2;
 
-  // Draw table borders
-  const tableStartY = yPos - lineHeight * 1.5;
-  const tableEndY = yPos + (Math.min(students.length, 25) * lineHeight * 0.8);
-  
-  // Horizontal lines
-  doc.moveTo(margin, tableStartY).lineTo(pageWidth - margin, tableStartY).stroke();
-  doc.moveTo(margin, yPos).lineTo(pageWidth - margin, yPos).stroke();
-  doc.moveTo(margin, tableEndY).lineTo(pageWidth - margin, tableEndY).stroke();
+  // Calculate pagination - 25 students per page
+  const studentsPerPage = 25;
+  const totalPages = Math.ceil(students.length / studentsPerPage);
 
-  // Vertical lines
-  xPos = margin;
-  doc.moveTo(xPos, tableStartY).lineTo(xPos, tableEndY).stroke();
-  headers.forEach((_, i) => {
-    xPos += colWidths[i];
-    doc.moveTo(xPos, tableStartY).lineTo(xPos, tableEndY).stroke();
-  });
+  // Generate pages - one page per 25 students
+  for (let pageIndex = 0; pageIndex < totalPages; pageIndex++) {
+    if (pageIndex > 0) {
+      doc.addPage();
+    }
 
-  // Student data
-  doc.font('Helvetica')
-     .fontSize(smallFontSize * 0.9);
-  
-  for (let i = 0; i < Math.min(students.length, 25); i++) {
-    const student = students[i];
-    xPos = margin;
-    yPos += lineHeight * 0.8;
+    const startIdx = pageIndex * studentsPerPage;
+    const endIdx = Math.min(startIdx + studentsPerPage, students.length);
+    const pageStudents = students.slice(startIdx, endIdx);
 
-    const middleInitial = student.middle_name ? `${student.middle_name.charAt(0).toUpperCase()}.` : '';
-    const fullName = `${student.last_name || ''}, ${student.first_name || ''} ${middleInitial}`.trim();
-    const ageInMonths = calculateAgeInMonths(student.birthdate);
+    // Reset Y position for new page
+    yPos = margin;
 
-    const rowData = [
-      (i + 1).toString(),
-      fullName,
-      student.gender || '',
-      student.four_ps_id || '',
-      normalizeYesNo(student.disability, ''),
-      formatDateForCsv(student.birthdate),
-      ageInMonths === '' ? '' : ageInMonths.toString(),
-      student.height_cm ? student.height_cm.toString() : '',
-      student.weight_kg ? student.weight_kg.toString() : '',
-      student.birthplace || '',
-      student.child_address || '',
-      student.guardian_name || '',
-      student.phone_num || ''
+    // Images - positioned to align with header text
+    const image1Path = path.join(__dirname, '..', 'image.png');
+    const image2Path = path.join(__dirname, '..', 'image1.png');
+    const image1Height = 50 * scale;
+    const image2Height = 75 * scale;
+    const imageY = yPos + 5;
+    const image1Y = imageY;
+    const image2Y = imageY - 8; // image1.png moved upwards
+
+    if (fs.existsSync(image1Path)) {
+      doc.image(image1Path, margin + 50, image1Y, { width: 70 * scale, height: image1Height });
+    }
+    if (fs.existsSync(image2Path)) {
+      doc.image(image2Path, margin + 200, image2Y, { width: 100 * scale, height: image2Height });
+    }
+
+    // Header text (centered) - align with images
+    yPos += 20 * scale;
+    doc.fontSize(fontSize)
+       .text('Republic of the Philippines', pageWidth / 2, yPos, { align: 'center' });
+    yPos += lineHeight;
+    doc.text(`Province of ${province}`, pageWidth / 2, yPos, { align: 'center' });
+    yPos += lineHeight;
+    doc.font('Helvetica-Bold')
+       .text(`Municipality of ${municipality}`, pageWidth / 2, yPos, { align: 'center' });
+    yPos += lineHeight;
+    doc.font('Helvetica')
+       .fillColor('blue')
+       .text(`Email Address: ${loggedInEmail}`, pageWidth / 2, yPos, { align: 'center' });
+    yPos += lineHeight;
+    doc.fillColor('black')
+       .text(`Telephone number: ${loggedInPhone}`, pageWidth / 2, yPos, { align: 'center' });
+
+    yPos += lineHeight * 2;
+
+    // CDC info and counts
+    doc.fontSize(smallFontSize)
+       .text(`Name of CDC: ${cdcName}`, margin, yPos)
+       .text(`Male - ${maleCount}`, pageWidth - margin - 100, yPos, { align: 'right' });
+    yPos += lineHeight;
+    doc.text(`Name of CDW: ${cdwDisplayName}`, margin, yPos)
+       .text(`Female - ${femaleCount}`, pageWidth - margin - 100, yPos, { align: 'right' });
+    yPos += lineHeight;
+    doc.text(`Barangay: ${barangay}`, margin, yPos)
+       .font('Helvetica-Bold')
+       .text(`TOTAL - ${totalCount}`, pageWidth - margin - 100, yPos, { align: 'right' });
+
+    yPos += lineHeight * 2;
+
+    // Title
+    doc.font('Helvetica-Bold')
+       .fontSize(18)
+       .text('MASTERLIST OF DAYCARE CHILDREN', pageWidth / 2, yPos, { align: 'center' });
+
+    yPos += lineHeight * 1.5;
+
+    // Table headers - match Excel column structure
+    const colWidths = [
+      25 * scale,  // No.
+      100 * scale, // NAME OF CHILD (merged)
+      30 * scale,  // SEX
+      50 * scale,  // 4ps ID
+      35 * scale,  // DISABILITY
+      60 * scale,  // BIRTHDATE
+      35 * scale,  // AGE
+      35 * scale,  // HEIGHT
+      35 * scale,  // WEIGHT
+      60 * scale,  // BIRTHPLACE
+      80 * scale,  // ADDRESS
+      90 * scale,  // GUARDIAN (merged)
+      50 * scale   // CONTACT
     ];
+    xPos = margin;
 
-    rowData.forEach((text, colIdx) => {
-      doc.text(text || '', xPos + 2, yPos, { 
-        width: colWidths[colIdx] - 4, 
-        align: colIdx === 0 ? 'center' : 'left',
-        ellipsis: true
-      });
-      xPos += colWidths[colIdx];
+    const headers = ['No.', 'NAME OF CHILD', 'SEX', '4ps ID', 'DISABILITY', 'BIRTHDATE', 'AGE', 'HEIGHT', 'WEIGHT', 'BIRTHPLACE', 'ADDRESS', 'GUARDIAN', 'CONTACT'];
+    doc.fontSize(smallFontSize)
+       .font('Helvetica-Bold')
+       .fillColor('black');
+
+    // Draw header row with borders
+    const headerY = yPos;
+    headers.forEach((header, i) => {
+      doc.rect(xPos, headerY, colWidths[i], lineHeight * 1.2)
+         .stroke();
+      doc.text(header, xPos + 2, headerY + 3, { width: colWidths[i] - 4, align: 'center' });
+      xPos += colWidths[i];
     });
+
+    yPos += lineHeight * 1.2;
+
+    // Draw table borders for data rows
+    const tableStartY = headerY;
+    const tableEndY = yPos + (pageStudents.length * lineHeight * 0.9);
+    
+    // Draw vertical lines for all columns
+    xPos = margin;
+    doc.moveTo(xPos, tableStartY).lineTo(xPos, tableEndY).stroke();
+    headers.forEach((_, i) => {
+      xPos += colWidths[i];
+      doc.moveTo(xPos, tableStartY).lineTo(xPos, tableEndY).stroke();
+    });
+    
+    // Draw bottom border
+    doc.moveTo(margin, tableEndY).lineTo(pageWidth - margin, tableEndY).stroke();
+
+    // Student data with cell borders
+    doc.font('Helvetica')
+       .fontSize(smallFontSize * 0.85);
+    
+    for (let i = 0; i < pageStudents.length; i++) {
+      const student = pageStudents[i];
+      xPos = margin;
+      const globalIndex = startIdx + i;
+
+      const middleInitial = student.middle_name ? `${student.middle_name.charAt(0).toUpperCase()}.` : '';
+      const fullName = `${student.last_name || ''}, ${student.first_name || ''} ${middleInitial}`.trim();
+      const ageInMonths = calculateAgeInMonths(student.birthdate);
+
+      const rowData = [
+        (globalIndex + 1).toString(),
+        fullName,
+        student.gender || '',
+        student.four_ps_id || '',
+        normalizeYesNo(student.disability, ''),
+        formatDateForCsv(student.birthdate),
+        ageInMonths === '' ? '' : ageInMonths.toString(),
+        student.height_cm ? student.height_cm.toString() : '',
+        student.weight_kg ? student.weight_kg.toString() : '',
+        student.birthplace || '',
+        student.child_address || '',
+        student.guardian_name || '',
+        student.phone_num || ''
+      ];
+
+      // Draw row with borders
+      rowData.forEach((text, colIdx) => {
+        doc.rect(xPos, yPos, colWidths[colIdx], lineHeight * 0.9)
+           .stroke();
+        doc.text(text || '', xPos + 2, yPos + 2, { 
+          width: colWidths[colIdx] - 4, 
+          align: colIdx === 0 ? 'center' : 'left',
+          ellipsis: true
+        });
+        xPos += colWidths[colIdx];
+      });
+
+      yPos += lineHeight * 0.9;
+    }
+
+    // Footer
+    yPos = tableEndY + lineHeight * 2;
+    doc.fontSize(smallFontSize)
+       .font('Helvetica')
+       .text('Prepared by:', margin + 50, yPos)
+       .text('Validated by:', margin + 200, yPos)
+       .text('Approved by:', margin + 350, yPos);
+
+    yPos += lineHeight * 1.5;
+    doc.text(loggedInName, margin + 50, yPos)
+       .text(focalName, margin + 200, yPos)
+       .text(mswName, margin + 350, yPos);
+
+    yPos += lineHeight;
+    doc.fontSize(smallFontSize * 0.9)
+       .text('Child Development Worker', margin + 50, yPos)
+       .text('ECCD Focal Person', margin + 200, yPos)
+       .text('MSWDO', margin + 350, yPos);
   }
-
-  // Footer
-  yPos = tableEndY + lineHeight * 2;
-  doc.fontSize(smallFontSize)
-     .font('Helvetica')
-     .text('Prepared by:', margin + 50, yPos)
-     .text('Validated by:', margin + 200, yPos)
-     .text('Approved by:', margin + 350, yPos);
-
-  yPos += lineHeight * 1.5;
-  doc.text(loggedInName, margin + 50, yPos)
-     .text(focalName, margin + 200, yPos)
-     .text(mswName, margin + 350, yPos);
-
-  yPos += lineHeight;
-  doc.fontSize(smallFontSize * 0.9)
-     .text('Child Development Worker', margin + 50, yPos)
-     .text('ECCD Focal Person', margin + 200, yPos)
-     .text('MSWDO', margin + 350, yPos);
 
   doc.end();
 }
@@ -654,9 +774,9 @@ router.get('/export', authenticate, async (req, res) => {
       right: { style: 'thin' }
     };
 
-    // Helper function to set cell with border
-    const setCell = (row, col, value, style = {}) => {
-      const cell = worksheet.getCell(row, col);
+    // Helper function to set cell with border (accepts worksheet parameter)
+    const setCell = (ws, row, col, value, style = {}) => {
+      const cell = ws.getCell(row, col);
       cell.value = value;
       cell.border = borderStyle;
       if (style.font) cell.font = style.font;
@@ -665,10 +785,10 @@ router.get('/export', authenticate, async (req, res) => {
       return cell;
     };
 
-    // Helper function to merge cells with border
-    const mergeCells = (startRow, startCol, endRow, endCol, value, style = {}) => {
-      worksheet.mergeCells(startRow, startCol, endRow, endCol);
-      const cell = worksheet.getCell(startRow, startCol);
+    // Helper function to merge cells with border (accepts worksheet parameter)
+    const mergeCells = (ws, startRow, startCol, endRow, endCol, value, style = {}) => {
+      ws.mergeCells(startRow, startCol, endRow, endCol);
+      const cell = ws.getCell(startRow, startCol);
       cell.value = value;
       cell.border = borderStyle;
       if (style.font) cell.font = style.font;
@@ -677,271 +797,292 @@ router.get('/export', authenticate, async (req, res) => {
       return cell;
     };
 
-    // Add borders to all cells in the used range first
-    // We'll add borders as we create cells, but also ensure empty cells in header area have borders
+    // Calculate pagination - 25 students per page/sheet
+    const studentsPerPage = 25;
+    const totalPages = Math.ceil(students.length / studentsPerPage);
     
-    // Set row heights for image rows (5-8) to ensure vertical centering
-    // Make rows taller to accommodate images and center them vertically
-    for (let row = 5; row <= 8; row++) {
-      worksheet.getRow(row).height = 40; // Taller rows for images
-    }
-    
-    // Add images (logos) - Row 5-8, Columns C and E (cells C5-C8 and E5-E8)
-    // Vertically center images by calculating the middle position
-    try {
-      const image1Path = path.join(__dirname, '..', 'image.png');
-      const image2Path = path.join(__dirname, '..', 'image1.png');
+    // Helper function to create a complete page/sheet with header, data, and footer
+    const createExcelPage = (ws, pageStudents, startStudentIndex, pageNum) => {
+      // Data rows (22-46) - up to 25 rows per page
+      for (let i = 0; i < studentsPerPage; i++) {
+        const rowNum = 22 + i;
+        const globalIndex = startStudentIndex + i;
+        
+        if (i < pageStudents.length) {
+          const student = pageStudents[i];
+          const middleInitial = student.middle_name ? `${student.middle_name.charAt(0).toUpperCase()}.` : '';
+          const fullName = `${student.last_name || ''}, ${student.first_name || ''} ${middleInitial}`.trim();
+          const ageInMonths = calculateAgeInMonths(student.birthdate);
+          
+          // Column 1: No. (use global index + 1)
+          setCell(ws, rowNum, 1, (globalIndex + 1).toString(), { font: { size: 14 }, alignment: { vertical: 'middle', horizontal: 'center' } });
+          
+          // Columns 2-3: NAME OF CHILD (merged)
+          mergeCells(ws, rowNum, 2, rowNum, 3, fullName, { font: { size: 14 }, alignment: { vertical: 'middle', wrapText: true } });
+          
+          // Column 4: SEX
+          setCell(ws, rowNum, 4, student.gender || '', { font: { size: 14 }, alignment: { vertical: 'middle', horizontal: 'center' } });
+          
+          // Column 5: 4ps ID Number
+          setCell(ws, rowNum, 5, student.four_ps_id || '', { font: { size: 14 }, alignment: { vertical: 'middle', wrapText: true } });
+          
+          // Column 6: DISABILITY
+          setCell(ws, rowNum, 6, normalizeYesNo(student.disability, ''), { font: { size: 14 }, alignment: { vertical: 'middle', horizontal: 'center' } });
+          
+          // Column 7: BIRTHDATE
+          setCell(ws, rowNum, 7, formatDateForCsv(student.birthdate), { font: { size: 14 }, alignment: { vertical: 'middle', horizontal: 'center' } });
+          
+          // Column 8: AGE IN MONTHS
+          setCell(ws, rowNum, 8, ageInMonths === '' ? '' : ageInMonths.toString(), { font: { size: 14 }, alignment: { vertical: 'middle', horizontal: 'center' } });
+          
+          // Column 9: HEIGHT
+          setCell(ws, rowNum, 9, student.height_cm ? student.height_cm.toString() : '', { font: { size: 14 }, alignment: { vertical: 'middle', horizontal: 'center' } });
+          
+          // Column 10: WEIGHT
+          setCell(ws, rowNum, 10, student.weight_kg ? student.weight_kg.toString() : '', { font: { size: 14 }, alignment: { vertical: 'middle', horizontal: 'center' } });
+          
+          // Column 11: BIRTHPLACE
+          setCell(ws, rowNum, 11, student.birthplace || '', { font: { size: 14 }, alignment: { vertical: 'middle', wrapText: true } });
+          
+          // Column 12: ADDRESS
+          setCell(ws, rowNum, 12, student.child_address || '', { font: { size: 14 }, alignment: { vertical: 'middle', wrapText: true } });
+          
+          // Columns 13-14: NAME OF PARENTS/GUARDIAN (merged)
+          mergeCells(ws, rowNum, 13, rowNum, 14, student.guardian_name || '', { font: { size: 14 }, alignment: { vertical: 'middle', wrapText: true } });
+          
+          // Column 15: CONTACT NO.
+          setCell(ws, rowNum, 15, student.phone_num || '', { font: { size: 14 }, alignment: { vertical: 'middle', horizontal: 'center' } });
+        } else {
+          // Empty rows for template
+          setCell(ws, rowNum, 1, (globalIndex + 1).toString(), { font: { size: 14 }, alignment: { vertical: 'middle', horizontal: 'center' } });
+          mergeCells(ws, rowNum, 2, rowNum, 3, '', { font: { size: 14 }, alignment: { vertical: 'middle', wrapText: true } });
+          for (let col = 4; col <= 12; col++) {
+            setCell(ws, rowNum, col, '', { font: { size: 14 }, alignment: { vertical: 'middle', wrapText: true } });
+          }
+          mergeCells(ws, rowNum, 13, rowNum, 14, '', { font: { size: 14 }, alignment: { vertical: 'middle', wrapText: true } });
+          setCell(ws, rowNum, 15, '', { font: { size: 14 }, alignment: { vertical: 'middle', wrapText: true } });
+        }
+      }
       
-      if (fs.existsSync(image1Path)) {
-        const image1 = workbook.addImage({
-          filename: image1Path,
-          extension: 'png',
-        });
-        // C5-C8: col 2 (C), rows 4-7 (5-8 in 1-indexed, but 0-indexed for ExcelJS)
-        // Position at row 5 (middle of rows 4-7) to vertically center
-        worksheet.addImage(image1, {
-          tl: { col: 2, row: 5 }, // Positioned at middle row for vertical centering
-          ext: { width: 240, height: 160 } // image.png - keep original size
-        });
+      // Footer rows
+      for (let row = 47; row <= 48; row++) {
+        for (let col = 1; col <= 15; col++) {
+          setCell(ws, row, col, '', { font: { size: 14 } });
+        }
       }
       
-      if (fs.existsSync(image2Path)) {
-        const image2 = workbook.addImage({
-          filename: image2Path,
-          extension: 'png',
-        });
-        // E5-E8: col 4 (E), rows 4-7 - image1.png (enlarged)
-        // Position at row 5 (middle of rows 4-7) to vertically center
-        worksheet.addImage(image2, {
-          tl: { col: 4, row: 5 }, // Positioned at middle row for vertical centering
-          ext: { width: 360, height: 240 } // Enlarged image1.png only
-        });
-      }
-    } catch (err) {
-      console.error('Error adding images:', err);
-    }
-    
-    // Add borders to header area cells (rows 1-4) that might be empty
-    for (let row = 1; row <= 4; row++) {
+      setCell(ws, 49, 2, 'Prepared by: ', { font: { size: 14 } });
+      setCell(ws, 49, 5, 'Validated by: ', { font: { size: 14 } });
+      setCell(ws, 49, 9, 'Approved by: ', { font: { size: 14 } });
+      
       for (let col = 1; col <= 15; col++) {
-        const cell = worksheet.getCell(row, col);
-        if (!cell.border) {
-          cell.border = borderStyle;
+        setCell(ws, 50, col, '', { font: { size: 14 } });
+      }
+      
+      setCell(ws, 51, 2, loggedInName, { font: { size: 14 } });
+      setCell(ws, 51, 5, focalName, { font: { size: 14 } });
+      setCell(ws, 51, 9, mswName, { font: { size: 14 } });
+      
+      setCell(ws, 52, 2, 'Child Development Worker', { font: { size: 14 } });
+      setCell(ws, 52, 5, 'ECCD Focal Person', { font: { size: 14 } });
+      setCell(ws, 52, 9, 'MSWDO', { font: { size: 14 } });
+      
+      // Empty footer rows
+      for (let row = 53; row <= 58; row++) {
+        for (let col = 1; col <= 15; col++) {
+          setCell(ws, row, col, '', { font: { size: 14 } });
         }
       }
-    }
-    
-    // Ensure cells with images (C5-C8 and E5-E8) have borders
-    for (let row = 5; row <= 8; row++) {
-      setCell(row, 3, ''); // Column C
-      setCell(row, 5, ''); // Column E
-    }
 
-    // Header rows (starting from row 5, Excel is 1-indexed) - centered
-    setCell(5, 7, 'Republic of the Philippines', { 
-      font: { size: 14 }, 
-      alignment: { horizontal: 'center', vertical: 'middle' } 
-    });
-    setCell(6, 7, `Province of ${province}`, { 
-      font: { size: 14 }, 
-      alignment: { horizontal: 'center', vertical: 'middle' } 
-    });
-    setCell(7, 7, `Municipality of ${municipality}`, { 
-      font: { size: 14, bold: true }, 
-      alignment: { horizontal: 'center', vertical: 'middle' } 
-    });
-    setCell(8, 7, `Email Address: ${loggedInEmail}`, { 
-      font: { size: 14, color: { argb: 'FF0000FF' }, underline: true }, 
-      alignment: { horizontal: 'center', vertical: 'middle' } 
-    });
-    setCell(9, 7, `Telephone number: ${loggedInPhone}`, { 
-      font: { size: 14 }, 
-      alignment: { horizontal: 'center', vertical: 'middle' } 
-    });
-    
-    // Empty rows
-    for (let row = 10; row <= 12; row++) {
-      for (let col = 1; col <= 15; col++) {
-        setCell(row, col, '');
-      }
-    }
-    
-    // Row 13: Name of CDC and Male count
-    setCell(13, 1, `Name of CDC :  ${cdcName}`, { font: { size: 14 } });
-    setCell(13, 10, `Male - ${maleCount}`, { font: { size: 14, bold: true } });
-    
-    // Row 14: Name of CDW and Female count
-    setCell(14, 1, `Name of CDW : ${cdwDisplayName}`, { font: { size: 14 } });
-    setCell(14, 10, `Female - ${femaleCount}`, { font: { size: 14, bold: true } });
-    
-    // Row 15: Barangay and TOTAL
-    setCell(15, 1, `Barangay :  ${barangay}`, { font: { size: 14 } });
-    setCell(15, 10, `TOTAL - ${totalCount}`, { font: { size: 14, bold: true } });
-    
-    // Empty rows
-    for (let row = 16; row <= 17; row++) {
-      for (let col = 1; col <= 15; col++) {
-        setCell(row, col, '');
-      }
-    }
-    
-    // Title row (18): MASTERLIST OF DAYCARE CHILDREN
-    mergeCells(18, 1, 18, 15, 'MASTERLIST OF DAYCARE CHILDREN', {
-      font: { name: 'Arial Black', size: 21, bold: true },
-      alignment: { horizontal: 'center', vertical: 'middle' }
-    });
-    
-    // Empty row
-    for (let col = 1; col <= 15; col++) {
-      setCell(19, col, '');
-    }
-    
-    // Column headers (20-21)
-    const headerRow1 = 20;
-    setCell(headerRow1, 1, 'No.', { font: { size: 14, bold: true }, alignment: { horizontal: 'center', vertical: 'middle' } });
-    // NAME OF CHILD - merge horizontally only (row 20, cols 2-3)
-    mergeCells(headerRow1, 2, headerRow1, 3, 'NAME OF CHILD', { font: { size: 14, bold: true }, alignment: { horizontal: 'center', vertical: 'middle' } });
-    setCell(headerRow1, 4, 'SEX', { font: { size: 14, bold: true }, alignment: { horizontal: 'center', vertical: 'middle' } });
-    setCell(headerRow1, 5, '4ps ID Number', { font: { size: 14, bold: true }, alignment: { horizontal: 'center', vertical: 'middle' } });
-    setCell(headerRow1, 6, 'DISABILITY', { font: { size: 14, bold: true }, alignment: { horizontal: 'center', vertical: 'middle' } });
-    setCell(headerRow1, 7, 'BIRTHDATE (M-D-Y)', { font: { size: 14, bold: true }, alignment: { horizontal: 'center', vertical: 'middle' } });
-    setCell(headerRow1, 8, 'AGE IN MONTHS', { font: { size: 14, bold: true }, alignment: { horizontal: 'center', vertical: 'middle' }, fill: { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FF90EE90' } } });
-    setCell(headerRow1, 9, 'HEIGHT', { font: { size: 14, bold: true }, alignment: { horizontal: 'center', vertical: 'middle' } });
-    setCell(headerRow1, 10, 'WEIGHT', { font: { size: 14, bold: true }, alignment: { horizontal: 'center', vertical: 'middle' } });
-    setCell(headerRow1, 11, 'BIRTHPLACE', { font: { size: 14, bold: true }, alignment: { horizontal: 'center', vertical: 'middle' } });
-    setCell(headerRow1, 12, 'ADDRESS', { font: { size: 14, bold: true }, alignment: { horizontal: 'center', vertical: 'middle' } });
-    // NAME OF PARENTS/GUARDIAN - merge horizontally only (row 20, cols 13-14)
-    mergeCells(headerRow1, 13, headerRow1, 14, 'NAME OF PARENTS/GUARDIAN', { font: { size: 14, bold: true }, alignment: { horizontal: 'center', vertical: 'middle' } });
-    setCell(headerRow1, 15, 'CONTACT NO.', { font: { size: 14, bold: true }, alignment: { horizontal: 'center', vertical: 'middle' } });
-    
-    // Sub-header row (21)
-    const headerRow2 = 21;
-    setCell(headerRow2, 1, '', { font: { size: 14, bold: true } });
-    // NAME OF CHILD sub-header - merge cells 2-3 horizontally (separate from row 20)
-    mergeCells(headerRow2, 2, headerRow2, 3, '(Last Name, First Name, Middle Initial)', { font: { size: 14 }, alignment: { horizontal: 'center', vertical: 'middle' } });
-    setCell(headerRow2, 4, '', { font: { size: 14, bold: true } });
-    setCell(headerRow2, 5, '', { font: { size: 14, bold: true } });
-    setCell(headerRow2, 6, '', { font: { size: 14, bold: true } });
-    setCell(headerRow2, 7, '', { font: { size: 14, bold: true } });
-    setCell(headerRow2, 8, '', { font: { size: 14, bold: true } }); // AGE IN MONTHS - no sub-header
-    setCell(headerRow2, 9, 'IN CM', { font: { size: 14 }, alignment: { horizontal: 'center', vertical: 'middle' } }); // HEIGHT sub-header
-    setCell(headerRow2, 10, 'IN KLS.', { font: { size: 14 }, alignment: { horizontal: 'center', vertical: 'middle' } }); // WEIGHT sub-header
-    setCell(headerRow2, 11, '', { font: { size: 14, bold: true } });
-    setCell(headerRow2, 12, '', { font: { size: 14, bold: true } });
-    // NAME OF PARENTS/GUARDIAN sub-header - merge cells 13-14 horizontally (separate from row 20)
-    mergeCells(headerRow2, 13, headerRow2, 14, '', { font: { size: 14, bold: true } });
-    setCell(headerRow2, 15, '', { font: { size: 14, bold: true } });
-    
-    // Data rows (22-46) - up to 25 rows
-    for (let i = 0; i < 25; i++) {
-      const rowNum = 22 + i;
-      if (i < students.length) {
-        const student = students[i];
-        const middleInitial = student.middle_name ? `${student.middle_name.charAt(0).toUpperCase()}.` : '';
-        const fullName = `${student.last_name || ''}, ${student.first_name || ''} ${middleInitial}`.trim();
-        const ageInMonths = calculateAgeInMonths(student.birthdate);
-        
-        // Column 1: No.
-        setCell(rowNum, 1, (i + 1).toString(), { font: { size: 14 }, alignment: { vertical: 'middle', horizontal: 'center' } });
-        
-        // Columns 2-3: NAME OF CHILD (merged)
-        mergeCells(rowNum, 2, rowNum, 3, fullName, { font: { size: 14 }, alignment: { vertical: 'middle', wrapText: true } });
-        
-        // Column 4: SEX
-        setCell(rowNum, 4, student.gender || '', { font: { size: 14 }, alignment: { vertical: 'middle', horizontal: 'center' } });
-        
-        // Column 5: 4ps ID Number
-        setCell(rowNum, 5, student.four_ps_id || '', { font: { size: 14 }, alignment: { vertical: 'middle', wrapText: true } });
-        
-        // Column 6: DISABILITY
-        setCell(rowNum, 6, normalizeYesNo(student.disability, ''), { font: { size: 14 }, alignment: { vertical: 'middle', horizontal: 'center' } });
-        
-        // Column 7: BIRTHDATE
-        setCell(rowNum, 7, formatDateForCsv(student.birthdate), { font: { size: 14 }, alignment: { vertical: 'middle', horizontal: 'center' } });
-        
-        // Column 8: AGE IN MONTHS
-        setCell(rowNum, 8, ageInMonths === '' ? '' : ageInMonths.toString(), { font: { size: 14 }, alignment: { vertical: 'middle', horizontal: 'center' } });
-        
-        // Column 9: HEIGHT
-        setCell(rowNum, 9, student.height_cm ? student.height_cm.toString() : '', { font: { size: 14 }, alignment: { vertical: 'middle', horizontal: 'center' } });
-        
-        // Column 10: WEIGHT
-        setCell(rowNum, 10, student.weight_kg ? student.weight_kg.toString() : '', { font: { size: 14 }, alignment: { vertical: 'middle', horizontal: 'center' } });
-        
-        // Column 11: BIRTHPLACE
-        setCell(rowNum, 11, student.birthplace || '', { font: { size: 14 }, alignment: { vertical: 'middle', wrapText: true } });
-        
-        // Column 12: ADDRESS
-        setCell(rowNum, 12, student.child_address || '', { font: { size: 14 }, alignment: { vertical: 'middle', wrapText: true } });
-        
-        // Columns 13-14: NAME OF PARENTS/GUARDIAN (merged)
-        mergeCells(rowNum, 13, rowNum, 14, student.guardian_name || '', { font: { size: 14 }, alignment: { vertical: 'middle', wrapText: true } });
-        
-        // Column 15: CONTACT NO.
-        setCell(rowNum, 15, student.phone_num || '', { font: { size: 14 }, alignment: { vertical: 'middle', horizontal: 'center' } });
-      } else {
-        // Empty rows for template
-        setCell(rowNum, 1, (i + 1).toString(), { font: { size: 14 }, alignment: { vertical: 'middle', horizontal: 'center' } });
-        mergeCells(rowNum, 2, rowNum, 3, '', { font: { size: 14 }, alignment: { vertical: 'middle', wrapText: true } });
-        for (let col = 4; col <= 12; col++) {
-          setCell(rowNum, col, '', { font: { size: 14 }, alignment: { vertical: 'middle', wrapText: true } });
-        }
-        mergeCells(rowNum, 13, rowNum, 14, '', { font: { size: 14 }, alignment: { vertical: 'middle', wrapText: true } });
-        setCell(rowNum, 15, '', { font: { size: 14 }, alignment: { vertical: 'middle', wrapText: true } });
-      }
-    }
-    
-    // Footer rows
-    for (let row = 47; row <= 48; row++) {
-      for (let col = 1; col <= 15; col++) {
-        setCell(row, col, '', { font: { size: 14 } });
-      }
-    }
-    
-    setCell(49, 2, 'Prepared by: ', { font: { size: 14 } });
-    setCell(49, 5, 'Validated by: ', { font: { size: 14 } });
-    setCell(49, 9, 'Approved by: ', { font: { size: 14 } });
-    
-    for (let col = 1; col <= 15; col++) {
-      setCell(50, col, '', { font: { size: 14 } });
-    }
-    
-    setCell(51, 2, loggedInName, { font: { size: 14 } });
-    setCell(51, 5, focalName, { font: { size: 14 } });
-    setCell(51, 9, mswName, { font: { size: 14 } });
-    
-    setCell(52, 2, 'Child Development Worker', { font: { size: 14 } });
-    setCell(52, 5, 'ECCD Focal Person', { font: { size: 14 } });
-    setCell(52, 9, 'MSWDO', { font: { size: 14 } });
-    
-    // Empty footer rows
-    for (let row = 53; row <= 58; row++) {
-      for (let col = 1; col <= 15; col++) {
-        setCell(row, col, '', { font: { size: 14 } });
-      }
-    }
-
-    // Auto-fit columns
-    worksheet.columns.forEach((column, index) => {
-      let maxLength = 0;
-      column.eachCell({ includeEmpty: true }, (cell) => {
-        const cellValue = cell.value ? cell.value.toString() : '';
-        const cellLength = cellValue.length;
-        if (cellLength > maxLength) {
-          maxLength = cellLength;
-        }
+      // Auto-fit columns
+      ws.columns.forEach((column, index) => {
+        let maxLength = 0;
+        column.eachCell({ includeEmpty: true }, (cell) => {
+          const cellValue = cell.value ? cell.value.toString() : '';
+          const cellLength = cellValue.length;
+          if (cellLength > maxLength) {
+            maxLength = cellLength;
+          }
+        });
+        column.width = Math.min(Math.max(maxLength + 2, 10), 50);
       });
-      column.width = Math.min(Math.max(maxLength + 2, 10), 50);
-    });
 
-    // Set row heights
-    for (let row = 1; row <= 58; row++) {
-      const rowObj = worksheet.getRow(row);
-      if (row >= 5 && row <= 8) {
-        rowObj.height = 30; // Image rows
-      } else {
-        rowObj.height = row === 18 ? 30 : 20; // Title row is taller
+      // Set row heights
+      for (let row = 1; row <= 58; row++) {
+        const rowObj = ws.getRow(row);
+        if (row >= 5 && row <= 8) {
+          rowObj.height = 30; // Image rows
+        } else {
+          rowObj.height = row === 18 ? 30 : 20; // Title row is taller
+        }
       }
+    };
+
+    // Helper function to create header section (rows 1-21) for a worksheet
+    const createExcelHeader = (ws) => {
+      // Set row heights for image rows (5-8) to ensure vertical centering
+      for (let row = 5; row <= 8; row++) {
+        ws.getRow(row).height = 40; // Taller rows for images
+      }
+      
+      // Add images (logos) - Row 5-8, Columns C and E (cells C5-C8 and E5-E8)
+      try {
+        const image1Path = path.join(__dirname, '..', 'image.png');
+        const image2Path = path.join(__dirname, '..', 'image1.png');
+        
+        if (fs.existsSync(image1Path)) {
+          const image1 = workbook.addImage({
+            filename: image1Path,
+            extension: 'png',
+          });
+          ws.addImage(image1, {
+            tl: { col: 2, row: 5 },
+            ext: { width: 240, height: 160 }
+          });
+        }
+        
+        if (fs.existsSync(image2Path)) {
+          const image2 = workbook.addImage({
+            filename: image2Path,
+            extension: 'png',
+          });
+          ws.addImage(image2, {
+            tl: { col: 4, row: 5 },
+            ext: { width: 360, height: 240 }
+          });
+        }
+      } catch (err) {
+        console.error('Error adding images:', err);
+      }
+      
+      // Add borders to header area cells (rows 1-4)
+      for (let row = 1; row <= 4; row++) {
+        for (let col = 1; col <= 15; col++) {
+          const cell = ws.getCell(row, col);
+          if (!cell.border) {
+            cell.border = borderStyle;
+          }
+        }
+      }
+      
+      // Ensure cells with images (C5-C8 and E5-E8) have borders
+      for (let row = 5; row <= 8; row++) {
+        setCell(ws, row, 3, ''); // Column C
+        setCell(ws, row, 5, ''); // Column E
+      }
+
+      // Header rows (starting from row 5) - centered
+      setCell(ws, 5, 7, 'Republic of the Philippines', { 
+        font: { size: 14 }, 
+        alignment: { horizontal: 'center', vertical: 'middle' } 
+      });
+      setCell(ws, 6, 7, `Province of ${province}`, { 
+        font: { size: 14 }, 
+        alignment: { horizontal: 'center', vertical: 'middle' } 
+      });
+      setCell(ws, 7, 7, `Municipality of ${municipality}`, { 
+        font: { size: 14, bold: true }, 
+        alignment: { horizontal: 'center', vertical: 'middle' } 
+      });
+      setCell(ws, 8, 7, `Email Address: ${loggedInEmail}`, { 
+        font: { size: 14, color: { argb: 'FF0000FF' }, underline: true }, 
+        alignment: { horizontal: 'center', vertical: 'middle' } 
+      });
+      setCell(ws, 9, 7, `Telephone number: ${loggedInPhone}`, { 
+        font: { size: 14 }, 
+        alignment: { horizontal: 'center', vertical: 'middle' } 
+      });
+      
+      // Empty rows
+      for (let row = 10; row <= 12; row++) {
+        for (let col = 1; col <= 15; col++) {
+          setCell(ws, row, col, '');
+        }
+      }
+      
+      // Row 13: Name of CDC and Male count
+      setCell(ws, 13, 1, `Name of CDC :  ${cdcName}`, { font: { size: 14 } });
+      setCell(ws, 13, 10, `Male - ${maleCount}`, { font: { size: 14, bold: true } });
+      
+      // Row 14: Name of CDW and Female count
+      setCell(ws, 14, 1, `Name of CDW : ${cdwDisplayName}`, { font: { size: 14 } });
+      setCell(ws, 14, 10, `Female - ${femaleCount}`, { font: { size: 14, bold: true } });
+      
+      // Row 15: Barangay and TOTAL
+      setCell(ws, 15, 1, `Barangay :  ${barangay}`, { font: { size: 14 } });
+      setCell(ws, 15, 10, `TOTAL - ${totalCount}`, { font: { size: 14, bold: true } });
+      
+      // Empty rows
+      for (let row = 16; row <= 17; row++) {
+        for (let col = 1; col <= 15; col++) {
+          setCell(ws, row, col, '');
+        }
+      }
+      
+      // Title row (18): MASTERLIST OF DAYCARE CHILDREN
+      mergeCells(ws, 18, 1, 18, 15, 'MASTERLIST OF DAYCARE CHILDREN', {
+        font: { name: 'Arial Black', size: 21, bold: true },
+        alignment: { horizontal: 'center', vertical: 'middle' }
+      });
+      
+      // Empty row
+      for (let col = 1; col <= 15; col++) {
+        setCell(ws, 19, col, '');
+      }
+      
+      // Column headers (20-21)
+      const headerRow1 = 20;
+      setCell(ws, headerRow1, 1, 'No.', { font: { size: 14, bold: true }, alignment: { horizontal: 'center', vertical: 'middle' } });
+      mergeCells(ws, headerRow1, 2, headerRow1, 3, 'NAME OF CHILD', { font: { size: 14, bold: true }, alignment: { horizontal: 'center', vertical: 'middle' } });
+      setCell(ws, headerRow1, 4, 'SEX', { font: { size: 14, bold: true }, alignment: { horizontal: 'center', vertical: 'middle' } });
+      setCell(ws, headerRow1, 5, '4ps ID Number', { font: { size: 14, bold: true }, alignment: { horizontal: 'center', vertical: 'middle' } });
+      setCell(ws, headerRow1, 6, 'DISABILITY', { font: { size: 14, bold: true }, alignment: { horizontal: 'center', vertical: 'middle' } });
+      setCell(ws, headerRow1, 7, 'BIRTHDATE (M-D-Y)', { font: { size: 14, bold: true }, alignment: { horizontal: 'center', vertical: 'middle' } });
+      setCell(ws, headerRow1, 8, 'AGE IN MONTHS', { font: { size: 14, bold: true }, alignment: { horizontal: 'center', vertical: 'middle' }, fill: { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FF90EE90' } } });
+      setCell(ws, headerRow1, 9, 'HEIGHT', { font: { size: 14, bold: true }, alignment: { horizontal: 'center', vertical: 'middle' } });
+      setCell(ws, headerRow1, 10, 'WEIGHT', { font: { size: 14, bold: true }, alignment: { horizontal: 'center', vertical: 'middle' } });
+      setCell(ws, headerRow1, 11, 'BIRTHPLACE', { font: { size: 14, bold: true }, alignment: { horizontal: 'center', vertical: 'middle' } });
+      setCell(ws, headerRow1, 12, 'ADDRESS', { font: { size: 14, bold: true }, alignment: { horizontal: 'center', vertical: 'middle' } });
+      mergeCells(ws, headerRow1, 13, headerRow1, 14, 'NAME OF PARENTS/GUARDIAN', { font: { size: 14, bold: true }, alignment: { horizontal: 'center', vertical: 'middle' } });
+      setCell(ws, headerRow1, 15, 'CONTACT NO.', { font: { size: 14, bold: true }, alignment: { horizontal: 'center', vertical: 'middle' } });
+      
+      // Sub-header row (21)
+      const headerRow2 = 21;
+      setCell(ws, headerRow2, 1, '', { font: { size: 14, bold: true } });
+      mergeCells(ws, headerRow2, 2, headerRow2, 3, '(Last Name, First Name, Middle Initial)', { font: { size: 14 }, alignment: { horizontal: 'center', vertical: 'middle' } });
+      setCell(ws, headerRow2, 4, '', { font: { size: 14, bold: true } });
+      setCell(ws, headerRow2, 5, '', { font: { size: 14, bold: true } });
+      setCell(ws, headerRow2, 6, '', { font: { size: 14, bold: true } });
+      setCell(ws, headerRow2, 7, '', { font: { size: 14, bold: true } });
+      setCell(ws, headerRow2, 8, '', { font: { size: 14, bold: true } });
+      setCell(ws, headerRow2, 9, 'IN CM', { font: { size: 14 }, alignment: { horizontal: 'center', vertical: 'middle' } });
+      setCell(ws, headerRow2, 10, 'IN KLS.', { font: { size: 14 }, alignment: { horizontal: 'center', vertical: 'middle' } });
+      setCell(ws, headerRow2, 11, '', { font: { size: 14, bold: true } });
+      setCell(ws, headerRow2, 12, '', { font: { size: 14, bold: true } });
+      mergeCells(ws, headerRow2, 13, headerRow2, 14, '', { font: { size: 14, bold: true } });
+      setCell(ws, headerRow2, 15, '', { font: { size: 14, bold: true } });
+    };
+
+    // Create pages/sheets - loop through students in chunks of 25
+    for (let pageIndex = 0; pageIndex < totalPages; pageIndex++) {
+      const startIdx = pageIndex * studentsPerPage;
+      const endIdx = Math.min(startIdx + studentsPerPage, students.length);
+      const pageStudents = students.slice(startIdx, endIdx);
+      
+      let currentWorksheet;
+      if (pageIndex === 0) {
+        // Use the first worksheet
+        currentWorksheet = worksheet;
+      } else {
+        // Create a new worksheet for additional pages
+        currentWorksheet = workbook.addWorksheet(`Masterlist (Page ${pageIndex + 1})`);
+      }
+      
+      // Create header for this page/sheet
+      createExcelHeader(currentWorksheet);
+      
+      // Create data and footer for this page/sheet
+      createExcelPage(currentWorksheet, pageStudents, startIdx, pageIndex);
     }
 
     // Generate buffer and send based on format

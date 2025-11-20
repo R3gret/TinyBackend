@@ -572,8 +572,12 @@ function generateAttendancePDF(res, data) {
 
   // Calculate column widths - fit all dates on one page
   const studentNameWidth = 140;
-  const availableWidthForDates = usableWidth - studentNameWidth;
-  const dateColumnWidth = Math.min(availableWidthForDates / allDates.length, 25); // Max 25 points per column
+  const dateColumnWidth = Math.min(25, (usableWidth - studentNameWidth) / allDates.length); // Max 25 points per column
+  const totalTableWidth = studentNameWidth + (allDates.length * dateColumnWidth);
+  
+  // Calculate starting X position to center the table
+  const tableStartX = (pageWidth - totalTableWidth) / 2;
+  
   const fontSize = 7;
   const rowHeight = 14;
 
@@ -606,8 +610,8 @@ function generateAttendancePDF(res, data) {
        .text(`Page ${studentPage + 1} of ${totalStudentPages}`, pageWidth - margin - 50, yPos, { align: 'right' });
     yPos += 8;
 
-    // Table header
-    let xPos = margin;
+    // Table header - centered
+    let xPos = tableStartX;
 
     // Student Name header
     doc.fontSize(fontSize)
@@ -638,9 +642,9 @@ function generateAttendancePDF(res, data) {
 
     yPos += rowHeight;
 
-    // Student rows
+    // Student rows - centered
     pageStudents.forEach((student) => {
-      xPos = margin;
+      xPos = tableStartX;
       const studentName = `${student.last_name || ''}, ${student.first_name || ''} ${student.middle_name ? student.middle_name.charAt(0) + '.' : ''}`.trim();
 
       // Student name cell
@@ -675,12 +679,12 @@ function generateAttendancePDF(res, data) {
       yPos += rowHeight;
     });
 
-    // Legend at bottom of each page
+    // Legend at bottom of each page - centered
     const legendY = pageHeight - bottomMargin - 25;
     doc.fontSize(6)
        .font('Helvetica')
        .text('Legend: P = Present, L = Late, A = Absent, E = Excused, - = No Record', 
-             margin, legendY, { width: usableWidth });
+             pageWidth / 2, legendY, { align: 'center', width: usableWidth });
   }
 
   doc.end();
