@@ -7,6 +7,7 @@ const csvParser = require('csv-parser');
 const { Parser } = require('json2csv');
 const { Readable } = require('stream');
 const moment = require('moment');
+const ExcelJS = require('exceljs');
 
 // Middleware to get CDC ID from JWT
 const authenticate = require('./authMiddleware');
@@ -49,7 +50,12 @@ const formatChildName = (student) => {
 const formatDateForCsv = (date) => {
   if (!date) return '';
   const parsed = moment(date);
-  return parsed.isValid() ? parsed.format('MM-DD-YYYY') : '';
+  if (!parsed.isValid()) return '';
+  // Format as M-D-Y (single digits, no leading zeros)
+  const month = parsed.month() + 1; // moment months are 0-indexed
+  const day = parsed.date();
+  const year = parsed.year();
+  return `${month}-${day}-${year}`;
 };
 
 const calculateAgeInMonths = (date) => {
@@ -363,41 +369,100 @@ router.get('/export', authenticate, async (req, res) => {
     );
     const mswName = mswRows[0]?.msw_name || '_______________________';
 
-    // Build CSV rows matching exact template format
-    const csvRows = [];
+    // Create Excel workbook
+    const workbook = new ExcelJS.Workbook();
+    const worksheet = workbook.addWorksheet('Masterlist');
+    
+    // Define border style for all cells
+    const borderStyle = {
+      top: { style: 'thin' },
+      left: { style: 'thin' },
+      bottom: { style: 'thin' },
+      right: { style: 'thin' }
+    };
+    
+    // Helper function to add a row with optional formatting
+    const addRow = (values, rowOptions = {}) => {
+      const row = worksheet.addRow(values);
+      if (rowOptions.border) {
+        row.eachCell({ includeEmpty: true }, (cell) => {
+          cell.border = borderStyle;
+        });
+      }
+      if (rowOptions.font) {
+        row.font = rowOptions.font;
+      }
+      if (rowOptions.height) {
+        row.height = rowOptions.height;
+      }
+      if (rowOptions.alignment) {
+        row.alignment = rowOptions.alignment;
+      }
+      // Apply cell-specific formatting
+      if (rowOptions.cellFormats) {
+        row.eachCell({ includeEmpty: true }, (cell, colNumber) => {
+          const cellFormat = rowOptions.cellFormats[colNumber - 1];
+          if (cellFormat) {
+            if (cellFormat.font) cell.font = cellFormat.font;
+            if (cellFormat.alignment) cell.alignment = cellFormat.alignment;
+            if (cellFormat.border) cell.border = borderStyle;
+          }
+        });
+      }
+      return row;
+    };
     
     // Header rows (1-13)
-    csvRows.push(['', '', '', '', '', '', 'Republic of the Philippines', '', '', '', '', '', '', '', '']);
-    csvRows.push(['', '', '', '', '', '', `Province of ${province}`, '', '', '', '', '', '', '', '']);
-    csvRows.push(['', '', '', '', '', '', `Municipality of ${municipality}`, '', '', '', '', '', '', '', '']);
-    csvRows.push(['', '', '', '', '', '', `Email Address: ${loggedInEmail}`, '', '', '', '', '', '', '', '']);
-    csvRows.push(['', '', '', '', '', '', `Telephone number: ${loggedInPhone}`, '', '', '', '', '', '', '', '']);
-    csvRows.push(['', '', '', '', '', '', '', '', '', '', '', '', '', '', '']);
-    csvRows.push(['', '', '', '', '', '', '', '', '', '', '', '', '', '', '']);
-    csvRows.push(['', '', '', '', '', '', '', '', '', '', '', '', '', '', '']);
-    csvRows.push([`Name of CDC :  ${cdcName}`, '', '', '', '', '', '', '', '', `Male - ${maleCount}`, '', '', '', '', '']);
-    csvRows.push([`Name of CDW : ${cdwDisplayName}`, '', '', '', '', '', '', '', '', `Female - ${femaleCount}`, '', '', '', '', '']);
-    csvRows.push([`Barangay :  ${barangay}`, '', '', '', '', '', '', '', '', `TOTAL - ${totalCount}`, '', '', '', '', '']);
-    csvRows.push(['', '', '', '', '', '', '', '', '', '', '', '', '', '', '']);
-    csvRows.push(['', '', '', '', '', '', '', '', '', '', '', '', '', '', '']);
+    addRow(['', '', '', '', '', '', 'Republic of the Philippines', '', '', '', '', '', '', '', '']);
+    addRow(['', '', '', '', '', '', `Province of ${province}`, '', '', '', '', '', '', '', '']);
+    addRow(['', '', '', '', '', '', `Municipality of ${municipality}`, '', '', '', '', '', '', '', '']);
+    addRow(['', '', '', '', '', '', `Email Address: ${loggedInEmail}`, '', '', '', '', '', '', '', '']);
+    addRow(['', '', '', '', '', '', `Telephone number: ${loggedInPhone}`, '', '', '', '', '', '', '', '']);
+    addRow(['', '', '', '', '', '', '', '', '', '', '', '', '', '', '']);
+    addRow(['', '', '', '', '', '', '', '', '', '', '', '', '', '', '']);
+    addRow(['', '', '', '', '', '', '', '', '', '', '', '', '', '', '']);
     
-    // Title row (14)
-    csvRows.push(['', '', 'MASTERLIST OF DAYCARE CHILDREN ', '', '', '', '', '', '', '', '', '', '', '', '']);
-    csvRows.push(['', '', '', '', '', '', '', '', '', '', '', '', '', '', '']);
+    // Row with Male/Female counts - make Male and Female bold
+    const row9 = worksheet.addRow([`Name of CDC :  ${cdcName}`, '', '', '', '', '', '', '', '', `Male - ${maleCount}`, '', '', '', '', '']);
+    row9.getCell(10).font = { bold: true, size: 14 }; // Male - bold
+    const row10 = worksheet.addRow([`Name of CDW : ${cdwDisplayName}`, '', '', '', '', '', '', '', '', `Female - ${femaleCount}`, '', '', '', '', '']);
+    row10.getCell(10).font = { bold: true, size: 14 }; // Female - bold
+    addRow([`Barangay :  ${barangay}`, '', '', '', '', '', '', '', '', `TOTAL - ${totalCount}`, '', '', '', '', '']);
+    addRow(['', '', '', '', '', '', '', '', '', '', '', '', '', '', '']);
+    addRow(['', '', '', '', '', '', '', '', '', '', '', '', '', '', '']);
     
-    // Column headers (16-17)
-    csvRows.push(['No. ', 'NAME OF CHILD ', 'SEX', '4ps ID Number ', 'DISABILITY', 'BIRTHDATE (M-D-Y)', 'AGE IN MONTHS ', 'HEIGHT', 'WEIGHT ', 'BIRTHPLACE ', 'ADDRESS', 'NAME OF PARENTS/GUARDIAN', 'CONTACT NO. ', '', '']);
-    csvRows.push(['', '"(Last Name, First Name, Middle Initial)"', '', '', '', '', '', 'IN CM', 'IN KLS. ', '', '', '', '', '', '']);
+    // Title row (14) - MASTERLIST OF DAYCARE CHILDREN - size 21, Arial Black Bold
+    const titleRow = worksheet.addRow(['', '', 'MASTERLIST OF DAYCARE CHILDREN ', '', '', '', '', '', '', '', '', '', '', '', '']);
+    titleRow.getCell(3).font = { name: 'Arial Black', size: 21, bold: true };
+    titleRow.getCell(3).border = borderStyle;
+    addRow(['', '', '', '', '', '', '', '', '', '', '', '', '', '', '']);
     
-    // Data rows (18-42) - up to 25 rows
+    // Column headers (16-17) - with borders and bold
+    const headerRow1 = worksheet.addRow(['No. ', 'NAME OF CHILD ', 'SEX', '4ps ID Number ', 'DISABILITY', 'BIRTHDATE (M-D-Y)', 'AGE IN MONTHS ', 'HEIGHT', 'WEIGHT ', 'BIRTHPLACE ', 'ADDRESS', 'NAME OF PARENTS/GUARDIAN', 'CONTACT NO. ', '', '']);
+    headerRow1.eachCell({ includeEmpty: true }, (cell) => {
+      cell.border = borderStyle;
+      cell.font = { bold: true, size: 14 };
+      cell.alignment = { vertical: 'middle', horizontal: 'center', wrapText: true };
+    });
+    
+    const headerRow2 = worksheet.addRow(['', '"(Last Name, First Name, Middle Initial)"', '', '', '', '', '', 'IN CM', 'IN KLS. ', '', '', '', '', '', '']);
+    headerRow2.eachCell({ includeEmpty: true }, (cell) => {
+      cell.border = borderStyle;
+      cell.font = { size: 14 };
+      cell.alignment = { vertical: 'middle', horizontal: 'center', wrapText: true };
+    });
+    
+    // Data rows (18-42) - up to 25 rows - with borders, size 14, and auto-fit
+    const dataStartRow = worksheet.rowCount + 1;
     for (let i = 0; i < 25; i++) {
+      let rowData;
       if (i < students.length) {
         const student = students[i];
         const middleInitial = student.middle_name ? `${student.middle_name.charAt(0).toUpperCase()}.` : '';
         const fullName = `${student.last_name || ''}, ${student.first_name || ''} ${middleInitial}`.trim();
         const ageInMonths = calculateAgeInMonths(student.birthdate);
         
-        csvRows.push([
+        rowData = [
           (i + 1).toString(),
           fullName,
           student.gender || '',
@@ -413,46 +478,87 @@ router.get('/export', authenticate, async (req, res) => {
           student.phone_num || '',
           '',
           ''
-        ]);
+        ];
       } else {
         // Empty rows for template
-        csvRows.push([(i + 1).toString(), '', '', '', '', '', '', '', '', '', '', '', '', '', '']);
+        rowData = [(i + 1).toString(), '', '', '', '', '', '', '', '', '', '', '', '', '', ''];
+      }
+      
+      const dataRow = worksheet.addRow(rowData);
+      dataRow.eachCell({ includeEmpty: true }, (cell, colNumber) => {
+        cell.border = borderStyle;
+        cell.font = { size: 14 };
+        cell.alignment = { vertical: 'middle', horizontal: 'left', wrapText: true };
+        // Make SEX column (column 3) values bold if they are "Male" or "Female"
+        if (colNumber === 3 && (cell.value === 'Male' || cell.value === 'Female')) {
+          cell.font = { size: 14, bold: true };
+        }
+        // Format birthdate column (column 6) as text to prevent ####### display
+        if (colNumber === 6) {
+          cell.numFmt = '@'; // Text format
+        }
+      });
+    }
+    
+    // Footer rows
+    addRow(['', '', '', '', '', '', '', '', '', '', '', '', '', '', '']);
+    addRow(['', '', '', '', '', '', '', '', '', '', '', '', '', '', '']);
+    
+    // Footer with "Prepared by:", "Validated by:", "Approved by:" - make bold
+    const footerRow1 = worksheet.addRow(['', 'Prepared by: ', '', '', 'Validated by: ', '', '', '', 'Approved by: ', '', '', '', '', '', '']);
+    footerRow1.getCell(2).font = { bold: true, size: 14 };
+    footerRow1.getCell(5).font = { bold: true, size: 14 };
+    footerRow1.getCell(9).font = { bold: true, size: 14 };
+    
+    addRow(['', '', '', '', '', '', '', '', '', '', '', '', '', '', '']);
+    addRow(['', loggedInName, '', '', focalName, '', '', '', mswName, '', '', '', '', '', ''], {
+      font: { size: 14 }
+    });
+    addRow(['', 'Child Development Worker', '', '', 'ECCD Focal Person', '', '', '', 'MSWDO', '', '', '', '', '', ''], {
+      font: { size: 14 }
+    });
+    addRow(['', '', '', '', '', '', '', '', '', '', '', '', '', '', '']);
+    addRow(['', '', '', '', '', '', '', '', '', '', '', '', '', '', '']);
+    addRow(['', '', '', '', '', '', '', '', '', '', '', '', '', '', '']);
+    addRow(['', '', '', '', '', '', '', '', '', '', '', '', '', '', '']);
+    addRow(['', '', '', '', '', '', '', '', '', '', '', '', '', '', '']);
+    
+    // Apply borders to all cells in the data area (from header rows through data rows)
+    // Headers are at rows 16-17, data starts at row 18
+    const headerStartRow = 16;
+    const dataEndRow = headerStartRow + 1 + 25; // header rows + 25 data rows
+    for (let rowNum = headerStartRow; rowNum <= dataEndRow; rowNum++) {
+      const row = worksheet.getRow(rowNum);
+      if (row) {
+        row.eachCell({ includeEmpty: true }, (cell) => {
+          cell.border = borderStyle;
+        });
       }
     }
     
-    // Footer rows (45-48)
-    csvRows.push(['', '', '', '', '', '', '', '', '', '', '', '', '', '', '']);
-    csvRows.push(['', '', '', '', '', '', '', '', '', '', '', '', '', '', '']);
-    csvRows.push(['', 'Prepared by: ', '', '', 'Validated by: ', '', '', '', 'Approved by: ', '', '', '', '', '', '']);
-    csvRows.push(['', '', '', '', '', '', '', '', '', '', '', '', '', '', '']);
-    csvRows.push(['', loggedInName, '', '', focalName, '', '', '', mswName, '', '', '', '', '', '']);
-    csvRows.push(['', 'Child Development Worker', '', '', 'ECCD Focal Person', '', '', '', 'MSWDO', '', '', '', '', '', '']);
-    csvRows.push(['', '', '', '', '', '', '', '', '', '', '', '', '', '', '']);
-    csvRows.push(['', '', '', '', '', '', '', '', '', '', '', '', '', '', '']);
-    csvRows.push(['', '', '', '', '', '', '', '', '', '', '', '', '', '', '']);
-    csvRows.push(['', '', '', '', '', '', '', '', '', '', '', '', '', '', '']);
-    csvRows.push(['', '', '', '', '', '', '', '', '', '', '', '', '', '', '']);
-
-    // Convert to CSV format
-    const csvContent = csvRows.map(row => {
-      return row.map(cell => {
-        // Escape cells that contain commas, quotes, or newlines
-        if (cell === null || cell === undefined) return '';
-        const cellStr = cell.toString();
-        if (cellStr.includes(',') || cellStr.includes('"') || cellStr.includes('\n')) {
-          return `"${cellStr.replace(/"/g, '""')}"`;
+    // Auto-fit columns
+    worksheet.columns.forEach((column, index) => {
+      let maxLength = 0;
+      column.eachCell({ includeEmpty: true }, (cell) => {
+        const cellValue = cell.value ? cell.value.toString() : '';
+        if (cellValue.length > maxLength) {
+          maxLength = cellValue.length;
         }
-        return cellStr;
-      }).join(',');
-    }).join('\n');
-
+      });
+      // Set column width with some padding, but cap at reasonable max
+      column.width = Math.min(Math.max(maxLength + 2, 10), 50);
+    });
+    
+    // Generate Excel file buffer
+    const buffer = await workbook.xlsx.writeBuffer();
+    
     const timestamp = new Date().toISOString().split('T')[0];
-    res.setHeader('Content-Type', 'text/csv; charset=utf-8');
+    res.setHeader('Content-Type', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
     res.setHeader(
       'Content-Disposition',
-      `attachment; filename="cdc-students-${timestamp}.csv"`
+      `attachment; filename="cdc-students-${timestamp}.xlsx"`
     );
-    return res.status(200).send('\ufeff' + csvContent); // BOM for Excel
+    return res.status(200).send(buffer);
   } catch (err) {
     console.error('CSV export error:', err);
     return res.status(500).json({
