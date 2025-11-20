@@ -11,22 +11,6 @@ const moment = require('moment');
 // Middleware to get CDC ID from JWT
 const authenticate = require('./authMiddleware');
 
-const csvFields = [
-  { label: 'No.', value: 'rowNumber' },
-  { label: 'Name of Child', value: 'nameOfChild' },
-  { label: 'Sex', value: 'sex' },
-  { label: '4Ps ID Number', value: 'fourPsIdNumber' },
-  { label: 'Disability (Y/N)', value: 'disability' },
-  { label: 'Birthdate (M-D-Y)', value: 'birthdate' },
-  { label: 'Age in Months', value: 'ageInMonths' },
-  { label: 'Height (cm)', value: 'heightCm' },
-  { label: 'Weight (kg)', value: 'weightKg' },
-  { label: 'Birthplace', value: 'birthplace' },
-  { label: 'Address', value: 'address' },
-  { label: 'Parent/Guardian Name', value: 'guardianName' },
-  { label: 'Contact No.', value: 'contactNo' }
-];
-
 const upload = multer({
   storage: multer.memoryStorage(),
   limits: { fileSize: 2 * 1024 * 1024 },
@@ -244,7 +228,7 @@ router.get('/', authenticate, async (req, res) => {
   }
 });
 
-router.get('/export', async (req, res) => {
+router.get('/export', authenticate, async (req, res) => {
   const cdcId = req.user?.cdc_id;
   if (!cdcId) {
     return res.status(403).json({
@@ -256,6 +240,66 @@ router.get('/export', async (req, res) => {
   let connection;
   try {
     connection = await db.promisePool.getConnection();
+    
+    // Get CDC and location information
+    const [cdcInfo] = await connection.query(
+      `
+        SELECT 
+          c.name as cdc_name,
+          cl.Region as region,
+          cl.province,
+          cl.municipality,
+          cl.barangay
+        FROM cdc c
+        LEFT JOIN cdc_location cl ON c.location_id = cl.location_id
+        WHERE c.cdc_id = ?
+      `,
+      [cdcId]
+    );
+
+    const cdc = cdcInfo[0] || {};
+    const region = cdc.region || '';
+    const province = cdc.province || '';
+    const municipality = cdc.municipality || '';
+    const barangay = cdc.barangay || '';
+    const cdcName = cdc.cdc_name || '';
+
+    // Get CDW name (Child Development Worker) - get first active worker for this CDC
+    const [cdwInfo] = await connection.query(
+      `
+        SELECT uoi.full_name
+        FROM users u
+        LEFT JOIN user_other_info uoi ON u.id = uoi.user_id
+        WHERE u.cdc_id = ? AND u.type = 'worker' AND uoi.full_name IS NOT NULL
+        LIMIT 1
+      `,
+      [cdcId]
+    );
+    const cdwName = cdwInfo[0]?.full_name || '';
+
+    // Logged-in user info for contact details/signatures
+    const [userInfoRows] = await connection.query(
+      `
+        SELECT 
+          u.username,
+          o.full_name,
+          o.phone,
+          o.email
+        FROM users u
+        LEFT JOIN user_other_info o ON o.user_id = u.id
+        WHERE u.id = ?
+        LIMIT 1
+      `,
+      [req.user.id]
+    );
+    const userInfo = userInfoRows[0] || {};
+    const loggedInName = userInfo.full_name || userInfo.username || '';
+    const loggedInPhone = userInfo.phone || '';
+    const loggedInEmail = userInfo.email || '';
+    const cdwDisplayName = cdwName || loggedInName || '_______________________';
+    const preparedByName = loggedInName || '_______________________';
+
+    // Get all students with their data
     const [students] = await connection.query(
       `
         SELECT 
@@ -282,36 +326,133 @@ router.get('/export', async (req, res) => {
       [cdcId]
     );
 
-    const csvRows = students.map((student, index) => ({
-      rowNumber: index + 1,
-      nameOfChild: formatChildName(student),
-      sex: student.gender || '',
-      fourPsIdNumber: student.four_ps_id || '',
-      disability: normalizeYesNo(student.disability, ''),
-      birthdate: formatDateForCsv(student.birthdate),
-      ageInMonths: calculateAgeInMonths(student.birthdate),
-      heightCm: student.height_cm ?? '',
-      weightKg: student.weight_kg ?? '',
-      birthplace: student.birthplace ?? '',
-      address: student.child_address ?? '',
-      guardianName: student.guardian_name ?? '',
-      contactNo: student.phone_num ?? ''
-    }));
+    // Count male and female
+    const maleCount = students.filter(s => s.gender === 'Male').length;
+    const femaleCount = students.filter(s => s.gender === 'Female').length;
+    const totalCount = students.length;
 
-    const parser = new Parser({
-      fields: csvFields,
-      excelStrings: true,
-      withBOM: true
-    });
-    const csv = parser.parse(csvRows);
+    // Get focal person based on municipality
+    const [focalRows] = await connection.query(
+      `
+        SELECT COALESCE(o.full_name, u.username) AS focal_name
+        FROM users u
+        LEFT JOIN user_other_info o ON o.user_id = u.id
+        LEFT JOIN cdc c2 ON u.cdc_id = c2.cdc_id
+        LEFT JOIN cdc_location cl2 ON c2.location_id = cl2.location_id
+        WHERE u.type = 'focal'
+          AND (
+            (o.address IS NOT NULL AND o.address LIKE ?)
+            OR (cl2.municipality = ? AND (cl2.province = ? OR ? IS NULL))
+          )
+        LIMIT 1
+      `,
+      [`%${municipality}%`, municipality, province, province]
+    );
+    const focalName = focalRows[0]?.focal_name || '_______________________';
+
+    // Get MSW user (first available)
+    const [mswRows] = await connection.query(
+      `
+        SELECT COALESCE(o.full_name, u.username) AS msw_name
+        FROM users u
+        LEFT JOIN user_other_info o ON o.user_id = u.id
+        WHERE u.type = 'msw'
+        ORDER BY u.id ASC
+        LIMIT 1
+      `
+    );
+    const mswName = mswRows[0]?.msw_name || '_______________________';
+
+    // Build CSV rows matching exact template format
+    const csvRows = [];
+    
+    // Header rows (1-13)
+    csvRows.push(['', '', '', '', '', '', 'Republic of the Philippines', '', '', '', '', '', '', '', '']);
+    csvRows.push(['', '', '', '', '', '', `Province of ${province}`, '', '', '', '', '', '', '', '']);
+    csvRows.push(['', '', '', '', '', '', `Municipality of ${municipality}`, '', '', '', '', '', '', '', '']);
+    csvRows.push(['', '', '', '', '', '', `Email Address: ${loggedInEmail}`, '', '', '', '', '', '', '', '']);
+    csvRows.push(['', '', '', '', '', '', `Telephone number: ${loggedInPhone}`, '', '', '', '', '', '', '', '']);
+    csvRows.push(['', '', '', '', '', '', '', '', '', '', '', '', '', '', '']);
+    csvRows.push(['', '', '', '', '', '', '', '', '', '', '', '', '', '', '']);
+    csvRows.push(['', '', '', '', '', '', '', '', '', '', '', '', '', '', '']);
+    csvRows.push([`Name of CDC :  ${cdcName}`, '', '', '', '', '', '', '', '', `Male - ${maleCount}`, '', '', '', '', '']);
+    csvRows.push([`Name of CDW : ${cdwDisplayName}`, '', '', '', '', '', '', '', '', `Female - ${femaleCount}`, '', '', '', '', '']);
+    csvRows.push([`Barangay :  ${barangay}`, '', '', '', '', '', '', '', '', `TOTAL - ${totalCount}`, '', '', '', '', '']);
+    csvRows.push(['', '', '', '', '', '', '', '', '', '', '', '', '', '', '']);
+    csvRows.push(['', '', '', '', '', '', '', '', '', '', '', '', '', '', '']);
+    
+    // Title row (14)
+    csvRows.push(['', '', 'MASTERLIST OF DAYCARE CHILDREN ', '', '', '', '', '', '', '', '', '', '', '', '']);
+    csvRows.push(['', '', '', '', '', '', '', '', '', '', '', '', '', '', '']);
+    
+    // Column headers (16-17)
+    csvRows.push(['No. ', 'NAME OF CHILD ', 'SEX', '4ps ID Number ', 'DISABILITY', 'BIRTHDATE (M-D-Y)', 'AGE IN MONTHS ', 'HEIGHT', 'WEIGHT ', 'BIRTHPLACE ', 'ADDRESS', 'NAME OF PARENTS/GUARDIAN', 'CONTACT NO. ', '', '']);
+    csvRows.push(['', '"(Last Name, First Name, Middle Initial)"', '', '', '', '', '', 'IN CM', 'IN KLS. ', '', '', '', '', '', '']);
+    
+    // Data rows (18-42) - up to 25 rows
+    for (let i = 0; i < 25; i++) {
+      if (i < students.length) {
+        const student = students[i];
+        const middleInitial = student.middle_name ? `${student.middle_name.charAt(0).toUpperCase()}.` : '';
+        const fullName = `${student.last_name || ''}, ${student.first_name || ''} ${middleInitial}`.trim();
+        const ageInMonths = calculateAgeInMonths(student.birthdate);
+        
+        csvRows.push([
+          (i + 1).toString(),
+          fullName,
+          student.gender || '',
+          student.four_ps_id || '',
+          normalizeYesNo(student.disability, ''),
+          formatDateForCsv(student.birthdate),
+          ageInMonths === '' ? '' : ageInMonths.toString(),
+          student.height_cm ? student.height_cm.toString() : '',
+          student.weight_kg ? student.weight_kg.toString() : '',
+          student.birthplace || '',
+          student.child_address || '',
+          student.guardian_name || '',
+          student.phone_num || '',
+          '',
+          ''
+        ]);
+      } else {
+        // Empty rows for template
+        csvRows.push([(i + 1).toString(), '', '', '', '', '', '', '', '', '', '', '', '', '', '']);
+      }
+    }
+    
+    // Footer rows (45-48)
+    csvRows.push(['', '', '', '', '', '', '', '', '', '', '', '', '', '', '']);
+    csvRows.push(['', '', '', '', '', '', '', '', '', '', '', '', '', '', '']);
+    csvRows.push(['', 'Prepared by: ', '', '', 'Validated by: ', '', '', '', 'Approved by: ', '', '', '', '', '', '']);
+    csvRows.push(['', '', '', '', '', '', '', '', '', '', '', '', '', '', '']);
+    csvRows.push(['', loggedInName, '', '', focalName, '', '', '', mswName, '', '', '', '', '', '']);
+    csvRows.push(['', 'Child Development Worker', '', '', 'ECCD Focal Person', '', '', '', 'MSWDO', '', '', '', '', '', '']);
+    csvRows.push(['', '', '', '', '', '', '', '', '', '', '', '', '', '', '']);
+    csvRows.push(['', '', '', '', '', '', '', '', '', '', '', '', '', '', '']);
+    csvRows.push(['', '', '', '', '', '', '', '', '', '', '', '', '', '', '']);
+    csvRows.push(['', '', '', '', '', '', '', '', '', '', '', '', '', '', '']);
+    csvRows.push(['', '', '', '', '', '', '', '', '', '', '', '', '', '', '']);
+
+    // Convert to CSV format
+    const csvContent = csvRows.map(row => {
+      return row.map(cell => {
+        // Escape cells that contain commas, quotes, or newlines
+        if (cell === null || cell === undefined) return '';
+        const cellStr = cell.toString();
+        if (cellStr.includes(',') || cellStr.includes('"') || cellStr.includes('\n')) {
+          return `"${cellStr.replace(/"/g, '""')}"`;
+        }
+        return cellStr;
+      }).join(',');
+    }).join('\n');
 
     const timestamp = new Date().toISOString().split('T')[0];
-    res.setHeader('Content-Type', 'text/csv');
+    res.setHeader('Content-Type', 'text/csv; charset=utf-8');
     res.setHeader(
       'Content-Disposition',
       `attachment; filename="cdc-students-${timestamp}.csv"`
     );
-    return res.status(200).send(csv);
+    return res.status(200).send('\ufeff' + csvContent); // BOM for Excel
   } catch (err) {
     console.error('CSV export error:', err);
     return res.status(500).json({
@@ -323,7 +464,7 @@ router.get('/export', async (req, res) => {
   }
 });
 
-router.post('/import', handleCsvUpload, async (req, res) => {
+router.post('/import', authenticate, handleCsvUpload, async (req, res) => {
   const cdcId = req.user?.cdc_id;
   if (!cdcId) {
     return res.status(403).json({
@@ -339,9 +480,34 @@ router.post('/import', handleCsvUpload, async (req, res) => {
     });
   }
 
-  let rows;
+  // Parse CSV as raw rows (handling the template format)
+  let rawRows;
   try {
-    rows = await parseCsvBuffer(req.file.buffer);
+    const csvText = req.file.buffer.toString('utf-8').replace(/^\ufeff/, ''); // Remove BOM if present
+    rawRows = csvText.split('\n').map(line => {
+      const result = [];
+      let current = '';
+      let inQuotes = false;
+      
+      for (let i = 0; i < line.length; i++) {
+        const char = line[i];
+        if (char === '"') {
+          if (inQuotes && line[i + 1] === '"') {
+            current += '"';
+            i++; // Skip next quote
+          } else {
+            inQuotes = !inQuotes;
+          }
+        } else if (char === ',' && !inQuotes) {
+          result.push(current.trim());
+          current = '';
+        } else {
+          current += char;
+        }
+      }
+      result.push(current.trim());
+      return result;
+    });
   } catch (err) {
     console.error('CSV parse error:', err);
     return res.status(400).json({
@@ -350,10 +516,52 @@ router.post('/import', handleCsvUpload, async (req, res) => {
     });
   }
 
-  if (!rows.length) {
+  if (!rawRows.length || rawRows.length < 18) {
     return res.status(400).json({
       success: false,
-      message: 'CSV file is empty.'
+      message: 'CSV file is empty or invalid format.'
+    });
+  }
+
+  // Find data section - skip header rows (1-17), start from row 18 (index 17)
+  // Row 16 (index 15) has headers, row 17 (index 16) has sub-headers, row 18 (index 17) starts data
+  const dataRows = [];
+  for (let i = 17; i < rawRows.length; i++) {
+    const row = rawRows[i];
+    if (!row || row.length === 0) continue;
+    
+    // Stop at footer section (look for "Prepared by:" or empty rows after data)
+    if (row[1] && row[1].includes('Prepared by:')) break;
+    
+    // Check if this is a data row - should have a number in first column and name in second
+    const rowNum = row[0] ? row[0].trim() : '';
+    const nameValue = row[1] ? row[1].trim() : '';
+    
+    // Skip if no row number or no name (empty template rows)
+    if (!rowNum || !nameValue || !/^\d+$/.test(rowNum)) continue;
+    
+    // This is a valid data row
+    dataRows.push({
+      no: row[0]?.trim() || '',
+      nameOfChild: row[1]?.trim() || '',
+      sex: row[2]?.trim() || '',
+      fourPsIdNumber: row[3]?.trim() || '',
+      disability: row[4]?.trim() || '',
+      birthdate: row[5]?.trim() || '',
+      ageInMonths: row[6]?.trim() || '',
+      height: row[7]?.trim() || '',
+      weight: row[8]?.trim() || '',
+      birthplace: row[9]?.trim() || '',
+      address: row[10]?.trim() || '',
+      guardianName: row[11]?.trim() || '',
+      contactNo: row[12]?.trim() || ''
+    });
+  }
+
+  if (!dataRows.length) {
+    return res.status(400).json({
+      success: false,
+      message: 'No valid student data found in CSV file.'
     });
   }
 
@@ -364,19 +572,18 @@ router.post('/import', handleCsvUpload, async (req, res) => {
     connection = await db.promisePool.getConnection();
     await connection.beginTransaction();
 
-    for (const row of rows) {
-      const nameValue = row['Name of Child'] || row['nameOfChild'];
-      const { firstName, middleName, lastName } = splitChildName(nameValue || '');
-      const gender = parseGender(row['Sex'] || row['sex']);
-      const birthdate = parseBirthdateFromCsv(row['Birthdate (M-D-Y)'] || row['birthdate']);
-      const guardianName = (row['Parent/Guardian Name'] || row['guardianName'] || '').trim() || 'Unknown';
-      const address = (row['Address'] || row['address'] || '').trim() || null;
-      const contactNo = (row['Contact No.'] || row['contactNo'] || '').trim() || null;
-      const fourPsId = (row['4Ps ID Number'] || row['fourPsIdNumber'] || '').trim() || null;
-      const disability = normalizeYesNo(row['Disability (Y/N)'] || row['disability'], null);
-      const height = toNullableNumber(row['Height (cm)'] || row['heightCm']);
-      const weight = toNullableNumber(row['Weight (kg)'] || row['weightKg']);
-      const birthplace = (row['Birthplace'] || row['birthplace'] || '').trim() || null;
+    for (const row of dataRows) {
+      const { firstName, middleName, lastName } = splitChildName(row.nameOfChild || '');
+      const gender = parseGender(row.sex);
+      const birthdate = parseBirthdateFromCsv(row.birthdate);
+      const guardianName = (row.guardianName || '').trim() || 'Unknown';
+      const address = (row.address || '').trim() || null;
+      const contactNo = (row.contactNo || '').trim() || null;
+      const fourPsId = (row.fourPsIdNumber || '').trim() || null;
+      const disability = normalizeYesNo(row.disability, null);
+      const height = toNullableNumber(row.height);
+      const weight = toNullableNumber(row.weight);
+      const birthplace = (row.birthplace || '').trim() || null;
 
       if (!firstName || !lastName || !gender || !birthdate) {
         summary.skipped += 1;
