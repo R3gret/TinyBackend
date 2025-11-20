@@ -8,6 +8,8 @@ const { Parser } = require('json2csv');
 const { Readable } = require('stream');
 const moment = require('moment');
 const ExcelJS = require('exceljs');
+const fs = require('fs');
+const path = require('path');
 
 // Middleware to get CDC ID from JWT
 const authenticate = require('./authMiddleware');
@@ -412,29 +414,87 @@ router.get('/export', authenticate, async (req, res) => {
       return row;
     };
     
-    // Header rows (1-13)
-    addRow(['', '', '', '', '', '', 'Republic of the Philippines', '', '', '', '', '', '', '', '']);
-    addRow(['', '', '', '', '', '', `Province of ${province}`, '', '', '', '', '', '', '', '']);
-    addRow(['', '', '', '', '', '', `Municipality of ${municipality}`, '', '', '', '', '', '', '', '']);
-    addRow(['', '', '', '', '', '', `Email Address: ${loggedInEmail}`, '', '', '', '', '', '', '', '']);
-    addRow(['', '', '', '', '', '', `Telephone number: ${loggedInPhone}`, '', '', '', '', '', '', '', '']);
+    // Set column widths for logo area (A-C) - keep narrow for logos
+    worksheet.getColumn('A').width = 12;
+    worksheet.getColumn('B').width = 12;
+    worksheet.getColumn('C').width = 12;
+    
+    // Header rows (1-5) - with merged cells and centered text
+    // Row 1: Republic of the Philippines
+    const row1 = worksheet.addRow(['', '', '', '', '', '', 'Republic of the Philippines', '', '', '', '', '', '', '', '']);
+    worksheet.mergeCells('G1:O1');
+    row1.getCell(7).alignment = { vertical: 'middle', horizontal: 'center' };
+    row1.getCell(7).font = { size: 14 };
+    
+    // Row 2: Province
+    const row2 = worksheet.addRow(['', '', '', '', '', '', `Province of ${province}`, '', '', '', '', '', '', '', '']);
+    worksheet.mergeCells('G2:O2');
+    row2.getCell(7).alignment = { vertical: 'middle', horizontal: 'center' };
+    row2.getCell(7).font = { size: 14 };
+    
+    // Row 3: Municipality - centered and bold
+    const row3 = worksheet.addRow(['', '', '', '', '', '', `Municipality of ${municipality}`, '', '', '', '', '', '', '', '']);
+    worksheet.mergeCells('G3:O3');
+    row3.getCell(7).alignment = { vertical: 'middle', horizontal: 'center' };
+    row3.getCell(7).font = { size: 14, bold: true };
+    
+    // Row 4: Email Address - centered
+    const row4 = worksheet.addRow(['', '', '', '', '', '', `Email Address: ${loggedInEmail}`, '', '', '', '', '', '', '', '']);
+    worksheet.mergeCells('G4:O4');
+    row4.getCell(7).alignment = { vertical: 'middle', horizontal: 'center' };
+    row4.getCell(7).font = { size: 14 };
+    
+    // Row 5: Telephone number - centered and bold
+    const row5 = worksheet.addRow(['', '', '', '', '', '', `Telephone number: ${loggedInPhone}`, '', '', '', '', '', '', '', '']);
+    worksheet.mergeCells('G5:O5');
+    row5.getCell(7).alignment = { vertical: 'middle', horizontal: 'center' };
+    row5.getCell(7).font = { size: 14, bold: true };
+    
+    // Rows 6-8: Empty rows
     addRow(['', '', '', '', '', '', '', '', '', '', '', '', '', '', '']);
     addRow(['', '', '', '', '', '', '', '', '', '', '', '', '', '', '']);
     addRow(['', '', '', '', '', '', '', '', '', '', '', '', '', '', '']);
     
-    // Row with Male/Female counts - make Male and Female bold
+    // Row 9: Name of CDC - make CDC name bold
     const row9 = worksheet.addRow([`Name of CDC :  ${cdcName}`, '', '', '', '', '', '', '', '', `Male - ${maleCount}`, '', '', '', '', '']);
+    // Make the CDC name part bold (split the text)
+    const cdcText = `Name of CDC :  ${cdcName}`;
+    row9.getCell(1).value = { richText: [
+      { text: 'Name of CDC :  ', font: { size: 14 } },
+      { text: cdcName, font: { size: 14, bold: true } }
+    ]};
     row9.getCell(10).font = { bold: true, size: 14 }; // Male - bold
+    
+    // Row 10: Name of CDW - make CDW name bold
     const row10 = worksheet.addRow([`Name of CDW : ${cdwDisplayName}`, '', '', '', '', '', '', '', '', `Female - ${femaleCount}`, '', '', '', '', '']);
+    const cdwText = `Name of CDW : ${cdwDisplayName}`;
+    row10.getCell(1).value = { richText: [
+      { text: 'Name of CDW : ', font: { size: 14 } },
+      { text: cdwDisplayName, font: { size: 14, bold: true } }
+    ]};
     row10.getCell(10).font = { bold: true, size: 14 }; // Female - bold
-    addRow([`Barangay :  ${barangay}`, '', '', '', '', '', '', '', '', `TOTAL - ${totalCount}`, '', '', '', '', '']);
+    
+    // Row 11: Barangay - make barangay name bold, and TOTAL bold
+    const row11 = worksheet.addRow([`Barangay :  ${barangay}`, '', '', '', '', '', '', '', '', `TOTAL - ${totalCount}`, '', '', '', '', '']);
+    row11.getCell(1).value = { richText: [
+      { text: 'Barangay :  ', font: { size: 14 } },
+      { text: barangay, font: { size: 14, bold: true } }
+    ]};
+    row11.getCell(10).value = { richText: [
+      { text: 'TOTAL - ', font: { size: 14, bold: true } },
+      { text: totalCount.toString(), font: { size: 14, bold: true } }
+    ]};
+    
     addRow(['', '', '', '', '', '', '', '', '', '', '', '', '', '', '']);
     addRow(['', '', '', '', '', '', '', '', '', '', '', '', '', '', '']);
     
-    // Title row (14) - MASTERLIST OF DAYCARE CHILDREN - size 21, Arial Black Bold
-    const titleRow = worksheet.addRow(['', '', 'MASTERLIST OF DAYCARE CHILDREN ', '', '', '', '', '', '', '', '', '', '', '', '']);
-    titleRow.getCell(3).font = { name: 'Arial Black', size: 21, bold: true };
-    titleRow.getCell(3).border = borderStyle;
+    // Title row (14) - MASTERLIST OF DAYCARE CHILDREN - merge A14:O14, size 21, Arial Black Bold, centered
+    const titleRow = worksheet.addRow(['MASTERLIST OF DAYCARE CHILDREN', '', '', '', '', '', '', '', '', '', '', '', '', '', '']);
+    worksheet.mergeCells('A14:O14');
+    titleRow.getCell(1).font = { name: 'Arial Black', size: 21, bold: true };
+    titleRow.getCell(1).alignment = { vertical: 'middle', horizontal: 'center' };
+    titleRow.getCell(1).border = borderStyle;
+    
     addRow(['', '', '', '', '', '', '', '', '', '', '', '', '', '', '']);
     
     // Column headers (16-17) - with borders and bold
@@ -523,6 +583,64 @@ router.get('/export', authenticate, async (req, res) => {
     addRow(['', '', '', '', '', '', '', '', '', '', '', '', '', '', '']);
     addRow(['', '', '', '', '', '', '', '', '', '', '', '', '', '', '']);
     
+    // Add images - based on the screenshot, image1.png contains the header with both logos
+    // We'll place it to cover the left side (A1:C11) and image.png (BAGONG PILIPINAS) in the header
+    try {
+      // Image 1: Header section with both logos (PAMAHALAANG BAYAN NG LIAN and MSWDO)
+      // This covers A1 to C11 based on the screenshot
+      const image1Path = path.join(__dirname, '..', 'image1.png');
+      if (fs.existsSync(image1Path)) {
+        const image1 = workbook.addImage({
+          filename: image1Path,
+          extension: 'png',
+        });
+        // Position: A1 to C11 (rows 1-11, columns A-C)
+        // Calculate approximate dimensions based on column widths
+        const colAWidth = worksheet.getColumn('A').width || 12;
+        const colBWidth = worksheet.getColumn('B').width || 12;
+        const colCWidth = worksheet.getColumn('C').width || 12;
+        const totalWidth = (colAWidth + colBWidth + colCWidth) * 7; // Excel units
+        const totalHeight = 11 * 20; // Approximate row height * 11 rows
+        
+        worksheet.addImage(image1, {
+          tl: { col: 0, row: 0 }, // Top-left: column A (0), row 1 (0)
+          ext: { width: totalWidth, height: totalHeight }
+        });
+      }
+      
+      // Image 2: BAGONG PILIPINAS logo - typically placed in header area
+      // Based on government document standards, it might go above or integrated with header
+      const image2Path = path.join(__dirname, '..', 'image.png');
+      if (fs.existsSync(image2Path)) {
+        const image2 = workbook.addImage({
+          filename: image2Path,
+          extension: 'png',
+        });
+        // Position it in the header area - adjust based on exact requirements
+        // Placing it in the merged header area (G1:O1 region)
+        worksheet.addImage(image2, {
+          tl: { col: 6, row: 0 }, // Starting at column G (6), row 1 (0)
+          ext: { width: 200, height: 80 } // Adjust size as needed
+        });
+      }
+    } catch (err) {
+      console.error('Error adding images:', err);
+      // Continue without images if there's an error
+    }
+    
+    // Set row heights for logo rows to accommodate images
+    worksheet.getRow(1).height = 30;
+    worksheet.getRow(2).height = 30;
+    worksheet.getRow(3).height = 30;
+    worksheet.getRow(4).height = 30;
+    worksheet.getRow(5).height = 30;
+    worksheet.getRow(6).height = 30;
+    worksheet.getRow(7).height = 30;
+    worksheet.getRow(8).height = 30;
+    worksheet.getRow(9).height = 30;
+    worksheet.getRow(10).height = 30;
+    worksheet.getRow(11).height = 30;
+    
     // Apply borders to all cells in the data area (from header rows through data rows)
     // Headers are at rows 16-17, data starts at row 18
     const headerStartRow = 16;
@@ -536,12 +654,28 @@ router.get('/export', authenticate, async (req, res) => {
       }
     }
     
-    // Auto-fit columns
+    // Set fixed width for SEX column (column C, index 2) BEFORE auto-fitting others
+    // This ensures MASTERLIST title doesn't affect SEX column width
+    worksheet.getColumn('C').width = 8; // SEX column - fixed width
+    
+    // Auto-fit columns, but preserve logo column widths and SEX column
     worksheet.columns.forEach((column, index) => {
+      // Skip auto-fit for logo columns (A-C, indices 0-2) - already set
+      if (index < 3) {
+        // Column C (index 2) is SEX - already set to fixed width above
+        return;
+      }
+      
       let maxLength = 0;
       column.eachCell({ includeEmpty: true }, (cell) => {
         const cellValue = cell.value ? cell.value.toString() : '';
-        if (cellValue.length > maxLength) {
+        // Handle rich text
+        if (typeof cellValue === 'object' && cellValue.richText) {
+          const text = cellValue.richText.map(rt => rt.text).join('');
+          if (text.length > maxLength) {
+            maxLength = text.length;
+          }
+        } else if (cellValue.length > maxLength) {
           maxLength = cellValue.length;
         }
       });
