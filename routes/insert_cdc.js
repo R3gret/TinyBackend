@@ -332,7 +332,7 @@ router.get('/preslist', async (req, res) => {
 
 
   // Create CDC endpoint
-  router.post('/', async (req, res) => {
+  router.post('/', authenticate, async (req, res) => {
     const missingFields = validateCDCData(req.body);
     if (missingFields.length > 0) {
       return res.status(400).json({
@@ -342,12 +342,61 @@ router.get('/preslist', async (req, res) => {
       });
     }
 
-    const { name, region, province, municipality, barangay, president_id } = req.body;
+    const { name, region, province, municipality, barangay, cd_worker_id } = req.body;
+    const userId = req.user?.id;
+    const userType = req.user?.type;
     let connection;
 
     try {
       connection = await db.promisePool.getConnection();
       await connection.beginTransaction();
+
+      // If user is a focal person, validate location matches their profile
+      if (userType === 'focal') {
+        const [userInfo] = await connection.query(
+          `SELECT address FROM user_other_info WHERE user_id = ?`,
+          [userId]
+        );
+
+        if (userInfo.length && userInfo[0].address) {
+          // Parse address: "Barangay, Municipality, Province, Region"
+          const addressParts = userInfo[0].address.split(',').map(part => part.trim());
+          
+          if (addressParts.length >= 3) {
+            const userMunicipality = addressParts[1];
+            const userProvince = addressParts[2];
+            const userRegion = addressParts.length >= 4 ? addressParts[3] : null;
+
+            // Validate location matches
+            if (userProvince && userProvince !== province) {
+              await connection.rollback();
+              return res.status(400).json({
+                success: false,
+                message: 'CDC location must match your assigned region, province, and municipality',
+                error: 'LOCATION_MISMATCH'
+              });
+            }
+
+            if (userMunicipality && userMunicipality !== municipality) {
+              await connection.rollback();
+              return res.status(400).json({
+                success: false,
+                message: 'CDC location must match your assigned region, province, and municipality',
+                error: 'LOCATION_MISMATCH'
+              });
+            }
+
+            if (userRegion && userRegion !== region) {
+              await connection.rollback();
+              return res.status(400).json({
+                success: false,
+                message: 'CDC location must match your assigned region, province, and municipality',
+                error: 'LOCATION_MISMATCH'
+              });
+            }
+          }
+        }
+      }
 
       // Insert location
       const [locationResults] = await connection.query(
@@ -366,35 +415,37 @@ router.get('/preslist', async (req, res) => {
       );
       const newCdcId = cdcResults.insertId;
 
-      // If a president_id is provided, associate them with the new CDC
-      if (president_id) {
-        // Check if the user is a president and has no CDC assigned
-        const [presidents] = await connection.query(
-          'SELECT * FROM users WHERE id = ? AND type = \'president\'',
-          [president_id]
+      // If a cd_worker_id is provided, associate them with the new CDC
+      if (cd_worker_id) {
+        // Check if the user is a worker and has no CDC assigned
+        const [workers] = await connection.query(
+          'SELECT * FROM users WHERE id = ? AND type = \'worker\' AND (cdc_id IS NULL OR cdc_id = 0)',
+          [cd_worker_id]
         );
 
-        if (presidents.length === 0) {
+        if (workers.length === 0) {
           await connection.rollback();
           return res.status(404).json({
             success: false,
-            message: `President with ID ${president_id} not found.`
+            message: 'CD worker not found or invalid',
+            error: 'WORKER_NOT_FOUND'
           });
         }
 
-        const president = presidents[0];
-        if (president.cdc_id) {
+        const worker = workers[0];
+        if (worker.cdc_id) {
           await connection.rollback();
           return res.status(409).json({
             success: false,
-            message: `President with ID ${president_id} is already assigned to a CDC.`
+            message: 'CD worker is already assigned to another CDC',
+            error: 'WORKER_ALREADY_ASSIGNED'
           });
         }
 
-        // Assign the new CDC to the president
+        // Assign the new CDC to the CD worker
         await connection.query(
           'UPDATE users SET cdc_id = ? WHERE id = ?',
-          [newCdcId, president_id]
+          [newCdcId, cd_worker_id]
         );
       }
 
@@ -723,6 +774,57 @@ router.get('/preslist', async (req, res) => {
         success: false,
         message: 'Internal server error'
       });
+    }
+  });
+
+  // Get unassigned CD workers endpoint
+  router.get('/workers/unassigned', authenticate, async (req, res) => {
+    let connection;
+    try {
+      connection = await db.promisePool.getConnection();
+      
+      // Get unassigned workers (type='worker' and cdc_id IS NULL)
+      const [workers] = await connection.query(
+        `SELECT 
+          u.id,
+          u.username,
+          u.email,
+          u.type,
+          u.cdc_id,
+          uoi.full_name,
+          uoi.first_name,
+          uoi.last_name
+        FROM users u
+        LEFT JOIN user_other_info uoi ON u.id = uoi.user_id
+        WHERE u.type = 'worker' 
+          AND (u.cdc_id IS NULL OR u.cdc_id = 0)
+        ORDER BY u.username`
+      );
+
+      // Format the response to match expected structure
+      const formattedWorkers = workers.map(worker => ({
+        id: worker.id,
+        username: worker.username,
+        first_name: worker.first_name || null,
+        last_name: worker.last_name || null,
+        email: worker.email || null,
+        type: worker.type,
+        cdc_id: worker.cdc_id
+      }));
+
+      return res.json({
+        success: true,
+        data: formattedWorkers
+      });
+    } catch (err) {
+      console.error('Error fetching unassigned workers:', err);
+      return res.status(500).json({
+        success: false,
+        message: 'Failed to fetch unassigned workers',
+        error: process.env.NODE_ENV === 'development' ? err.message : undefined
+      });
+    } finally {
+      if (connection) await connection.release();
     }
   });
 

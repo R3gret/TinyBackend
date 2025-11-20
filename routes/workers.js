@@ -51,7 +51,6 @@ router.post('/', [
   }
 
   try {
-    const { cdc_id } = req.user;
     const { username, password } = req.body;
 
     const [existingUser] = await db.promisePool.query('SELECT id FROM users WHERE username = ?', [username]);
@@ -62,8 +61,8 @@ router.post('/', [
     const hashedPassword = await bcrypt.hash(password, 10);
 
     const [result] = await db.promisePool.query(
-      'INSERT INTO users (username, password, type, cdc_id) VALUES (?, ?, \'worker\', ?)',
-      [username, hashedPassword, cdc_id]
+      'INSERT INTO users (username, password, type) VALUES (?, ?, \'worker\')',
+      [username, hashedPassword]
     );
 
     res.status(201).json({ success: true, message: 'Worker created successfully', data: { id: result.insertId, username } });

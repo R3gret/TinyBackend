@@ -682,26 +682,26 @@ router.get('/export', authenticate, async (req, res) => {
 
     // Get all students with their data
     let studentsQuery = `
-      SELECT 
-        s.student_id,
-        s.first_name,
-        s.middle_name,
-        s.last_name,
-        s.gender,
-        s.birthdate,
+        SELECT 
+          s.student_id,
+          s.first_name,
+          s.middle_name,
+          s.last_name,
+          s.gender,
+          s.birthdate,
         s.enrolled_at,
-        s.four_ps_id,
-        s.disability,
-        s.height_cm,
-        s.weight_kg,
-        s.birthplace,
-        coi.child_address,
-        g.guardian_name,
-        g.phone_num
-      FROM students s
-      LEFT JOIN child_other_info coi ON coi.student_id = s.student_id
-      LEFT JOIN guardian_info g ON g.student_id = s.student_id
-      WHERE s.cdc_id = ?
+          s.four_ps_id,
+          s.disability,
+          s.height_cm,
+          s.weight_kg,
+          s.birthplace,
+          coi.child_address,
+          g.guardian_name,
+          g.phone_num
+        FROM students s
+        LEFT JOIN child_other_info coi ON coi.student_id = s.student_id
+        LEFT JOIN guardian_info g ON g.student_id = s.student_id
+        WHERE s.cdc_id = ?
     `;
     const studentsParams = [cdcId];
     
@@ -755,7 +755,7 @@ router.get('/export', authenticate, async (req, res) => {
     // Create Excel workbook
     const workbook = new ExcelJS.Workbook();
     const worksheet = workbook.addWorksheet('Masterlist');
-
+    
     // Define border style
     const borderStyle = {
       top: { style: 'thin' },
@@ -800,10 +800,10 @@ router.get('/export', authenticate, async (req, res) => {
         
         if (i < pageStudents.length) {
           const student = pageStudents[i];
-          const middleInitial = student.middle_name ? `${student.middle_name.charAt(0).toUpperCase()}.` : '';
-          const fullName = `${student.last_name || ''}, ${student.first_name || ''} ${middleInitial}`.trim();
-          const ageInMonths = calculateAgeInMonths(student.birthdate);
-          
+        const middleInitial = student.middle_name ? `${student.middle_name.charAt(0).toUpperCase()}.` : '';
+        const fullName = `${student.last_name || ''}, ${student.first_name || ''} ${middleInitial}`.trim();
+        const ageInMonths = calculateAgeInMonths(student.birthdate);
+        
           // Column 1: No. (use global index + 1)
           setCell(ws, rowNum, 1, (globalIndex + 1).toString(), { font: { size: 14 }, alignment: { vertical: 'middle', horizontal: 'center' } });
           
@@ -842,8 +842,8 @@ router.get('/export', authenticate, async (req, res) => {
           
           // Column 15: CONTACT NO.
           setCell(ws, rowNum, 15, student.phone_num || '', { font: { size: 14 }, alignment: { vertical: 'middle', horizontal: 'center' } });
-        } else {
-          // Empty rows for template
+      } else {
+        // Empty rows for template
           setCell(ws, rowNum, 1, (globalIndex + 1).toString(), { font: { size: 14 }, alignment: { vertical: 'middle', horizontal: 'center' } });
           mergeCells(ws, rowNum, 2, rowNum, 3, '', { font: { size: 14 }, alignment: { vertical: 'middle', wrapText: true } });
           for (let col = 4; col <= 12; col++) {
@@ -851,9 +851,9 @@ router.get('/export', authenticate, async (req, res) => {
           }
           mergeCells(ws, rowNum, 13, rowNum, 14, '', { font: { size: 14 }, alignment: { vertical: 'middle', wrapText: true } });
           setCell(ws, rowNum, 15, '', { font: { size: 14 }, alignment: { vertical: 'middle', wrapText: true } });
-        }
       }
-      
+    }
+    
       // Footer rows
       for (let row = 47; row <= 48; row++) {
         for (let col = 1; col <= 15; col++) {
@@ -1043,7 +1043,7 @@ router.get('/export', authenticate, async (req, res) => {
       setCell(ws, headerRow1, 12, 'ADDRESS', { font: { size: 14, bold: true }, alignment: { horizontal: 'center', vertical: 'middle' } });
       mergeCells(ws, headerRow1, 13, headerRow1, 14, 'NAME OF PARENTS/GUARDIAN', { font: { size: 14, bold: true }, alignment: { horizontal: 'center', vertical: 'middle' } });
       setCell(ws, headerRow1, 15, 'CONTACT NO.', { font: { size: 14, bold: true }, alignment: { horizontal: 'center', vertical: 'middle' } });
-      
+
       // Sub-header row (21)
       const headerRow2 = 21;
       setCell(ws, headerRow2, 1, '', { font: { size: 14, bold: true } });
@@ -1074,7 +1074,7 @@ router.get('/export', authenticate, async (req, res) => {
       } else {
         // Create a new worksheet for additional pages
         currentWorksheet = workbook.addWorksheet(`Masterlist (Page ${pageIndex + 1})`);
-      }
+        }
       
       // Create header for this page/sheet
       createExcelHeader(currentWorksheet);
@@ -1109,10 +1109,10 @@ router.get('/export', authenticate, async (req, res) => {
       // Generate Excel
       const buffer = await workbook.xlsx.writeBuffer();
       res.setHeader('Content-Type', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
-      res.setHeader(
-        'Content-Disposition',
+    res.setHeader(
+      'Content-Disposition',
         `attachment; filename="cdc-students-${timestamp}.xlsx"`
-      );
+    );
       return res.status(200).send(buffer);
     }
   } catch (err) {
