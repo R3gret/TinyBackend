@@ -562,9 +562,9 @@ router.get('/export', authenticate, async (req, res) => {
     setCell(headerRow2, 5, '', { font: { size: 14, bold: true } });
     setCell(headerRow2, 6, '', { font: { size: 14, bold: true } });
     setCell(headerRow2, 7, '', { font: { size: 14, bold: true } });
-    setCell(headerRow2, 8, 'IN CM', { font: { size: 14 }, alignment: { horizontal: 'center', vertical: 'middle' } });
-    setCell(headerRow2, 9, 'IN KLS.', { font: { size: 14 }, alignment: { horizontal: 'center', vertical: 'middle' } });
-    setCell(headerRow2, 10, '', { font: { size: 14, bold: true } });
+    setCell(headerRow2, 8, '', { font: { size: 14, bold: true } }); // AGE IN MONTHS - no sub-header
+    setCell(headerRow2, 9, 'IN CM', { font: { size: 14 }, alignment: { horizontal: 'center', vertical: 'middle' } }); // HEIGHT sub-header
+    setCell(headerRow2, 10, 'IN KLS.', { font: { size: 14 }, alignment: { horizontal: 'center', vertical: 'middle' } }); // WEIGHT sub-header
     setCell(headerRow2, 11, '', { font: { size: 14, bold: true } });
     setCell(headerRow2, 12, '', { font: { size: 14, bold: true } });
     // NAME OF PARENTS/GUARDIAN sub-header - merge cells 13-14 horizontally (separate from row 20)
