@@ -200,17 +200,16 @@ router.get('/', async (req, res) => {
     });
   }
 
-  const filterField = user.cdc_id ? 'a.cdc_id' : 'a.author_id';
-  const filterValue = user.cdc_id || user.id;
+  const userRole = user.role || user.type || '';
+  let filterContext = 'author';
+  let sqlQuery = '';
+  let params = [];
+  let requiresAddressLookup = false;
 
-  // If no CDC fallback is being used, let the caller know to avoid confusion
-  const filterContext = user.cdc_id ? 'cdc' : 'author';
-
-  try {
-    connection = await db.promisePool.getConnection();
-
-    const [results] = await connection.query(
-      `SELECT 
+  if (user.cdc_id) {
+    filterContext = 'cdc';
+    sqlQuery = `
+      SELECT 
         a.id,
         a.title,
         a.message,
@@ -223,16 +222,116 @@ router.get('/', async (req, res) => {
         a.role_filter as roleFilter,
         a.cdc_id as cdcId
       FROM announcements a
-      WHERE ${filterField} = ?
-      ORDER BY a.created_at DESC`,
-      [filterValue]
-    );
+      WHERE a.cdc_id = ?
+      ORDER BY a.created_at DESC
+    `;
+    params = [user.cdc_id];
+  } else if (userRole.toLowerCase() === 'focal') {
+    filterContext = 'role:focal';
+    requiresAddressLookup = true;
+  } else {
+    // Default fallback: author view
+    sqlQuery = `
+      SELECT 
+        a.id,
+        a.title,
+        a.message,
+        a.author_name as author,
+        a.author_id as author_id,
+        a.age_filter as ageFilter,
+        a.created_at as createdAt,
+        a.attachment_path as attachmentUrl,
+        a.attachment_name as attachmentName,
+        a.role_filter as roleFilter,
+        a.cdc_id as cdcId
+      FROM announcements a
+      WHERE a.author_id = ?
+      ORDER BY a.created_at DESC
+    `;
+    params = [user.id];
+  }
+
+  try {
+    connection = await db.promisePool.getConnection();
+    let results;
+    let geographicFilter = null;
+
+    if (requiresAddressLookup) {
+      const [userInfo] = await connection.query(
+        `SELECT address FROM user_other_info WHERE user_id = ?`,
+        [user.id]
+      );
+
+      if (!userInfo.length || !userInfo[0].address) {
+        return res.status(400).json({
+          success: false,
+          message: 'Focal user address not found. Please update the profile with a complete address.'
+        });
+      }
+
+      const addressParts = userInfo[0].address
+        .split(',')
+        .map(part => part.trim())
+        .filter(Boolean);
+
+      if (addressParts.length < 3) {
+        return res.status(400).json({
+          success: false,
+          message: 'Focal user address must follow "Barangay, Municipality, Province, Region" format.'
+        });
+      }
+
+      const userBarangay = addressParts[0] || null;
+      const userMunicipality = addressParts[1] || null;
+      const userProvince = addressParts[2] || null;
+
+      if (!userMunicipality || !userProvince) {
+        return res.status(400).json({
+          success: false,
+          message: 'Focal user address is missing municipality or province information.'
+        });
+      }
+
+      geographicFilter = {
+        barangay: userBarangay,
+        municipality: userMunicipality,
+        province: userProvince
+      };
+
+      sqlQuery = `
+        SELECT 
+          a.id,
+          a.title,
+          a.message,
+          a.author_name as author,
+          a.author_id as author_id,
+          a.age_filter as ageFilter,
+          a.created_at as createdAt,
+          a.attachment_path as attachmentUrl,
+          a.attachment_name as attachmentName,
+          a.role_filter as roleFilter,
+          a.cdc_id as cdcId
+        FROM announcements a
+        LEFT JOIN cdc c ON a.cdc_id = c.cdc_id
+        LEFT JOIN cdc_location cl ON c.location_id = cl.location_id
+        WHERE a.role_filter IS NOT NULL
+          AND FIND_IN_SET(?, a.role_filter)
+          AND cl.province = ?
+          AND cl.municipality = ?
+        ORDER BY a.created_at DESC
+      `;
+
+      params = ['focal', geographicFilter.province, geographicFilter.municipality];
+    }
+
+    [results] = await connection.query(sqlQuery, params);
 
     const announcements = results.map((row) => formatAnnouncementRecord(row, req));
 
     res.json({
       success: true,
       filter: filterContext,
+      geographicFilter,
       announcements
     });
 
