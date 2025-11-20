@@ -193,12 +193,18 @@ router.get('/', async (req, res) => {
   const user = req.user;
   let connection;
 
-  if (!user || !user.cdc_id) {
-    return res.status(403).json({
+  if (!user || !user.id) {
+    return res.status(401).json({
       success: false,
-      message: 'User CDC information not found in token.'
+      message: 'User information not found in token.'
     });
   }
+
+  const filterField = user.cdc_id ? 'a.cdc_id' : 'a.author_id';
+  const filterValue = user.cdc_id || user.id;
+
+  // If no CDC fallback is being used, let the caller know to avoid confusion
+  const filterContext = user.cdc_id ? 'cdc' : 'author';
 
   try {
     connection = await db.promisePool.getConnection();
@@ -217,15 +223,16 @@ router.get('/', async (req, res) => {
         a.role_filter as roleFilter,
         a.cdc_id as cdcId
       FROM announcements a
-      WHERE a.cdc_id = ?
+      WHERE ${filterField} = ?
       ORDER BY a.created_at DESC`,
-      [user.cdc_id]
+      [filterValue]
     );
 
     const announcements = results.map((row) => formatAnnouncementRecord(row, req));
 
     res.json({
       success: true,
+      filter: filterContext,
       announcements
     });
 
@@ -253,6 +260,8 @@ router.post('/multi-cdc', upload.single('attachment'), async (req, res) => {
   const file = req.file;
   const user = req.user;
   let connection;
+  const batchCreatedAt = new Date();
+  const formattedBatchCreatedAt = batchCreatedAt.toISOString().slice(0, 19).replace('T', ' ');
 
   if (!title || !message || !rawAgeFilter || normalizedRoleFilter.length === 0 || cdcIds.length === 0) {
     cleanupUploadedFile(file);
@@ -299,8 +308,9 @@ router.post('/multi-cdc', upload.single('attachment'), async (req, res) => {
             attachment_path, 
             attachment_name,
             cdc_id,
-            role_filter
-          ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+            role_filter,
+            created_at
+          ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
           [
             title,
             message,
@@ -310,11 +320,12 @@ router.post('/multi-cdc', upload.single('attachment'), async (req, res) => {
             file ? file.path : null,
             file ? file.originalname : null,
             cdcId,
-            normalizedRoleFilter.join(',')
+            normalizedRoleFilter.join(','),
+            formattedBatchCreatedAt
           ]
         );
 
-        created.push({ cdcId, announcementId: result.insertId });
+        created.push({ cdcId, announcementId: result.insertId, createdAt: batchCreatedAt.toISOString() });
       } catch (err) {
         console.error(`Failed to create announcement for CDC ${cdcId}:`, err);
         failures.push({ cdcId, error: 'Failed to create announcement' });
@@ -334,6 +345,7 @@ router.post('/multi-cdc', upload.single('attachment'), async (req, res) => {
     res.json({
       success: failures.length === 0,
       created,
+      batchCreatedAt: batchCreatedAt.toISOString(),
       failures
     });
   } catch (err) {
