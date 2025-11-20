@@ -414,10 +414,25 @@ router.get('/export', authenticate, async (req, res) => {
       return row;
     };
     
-    // Set column widths for logo area (A-C) - keep narrow for logos
-    worksheet.getColumn('A').width = 12;
-    worksheet.getColumn('B').width = 12;
-    worksheet.getColumn('C').width = 12;
+    // Set column widths - adjust for proper header fitting
+    // Logo/header area columns
+    worksheet.getColumn('A').width = 15; // Name of CDC/CDW/Barangay
+    worksheet.getColumn('B').width = 5;
+    worksheet.getColumn('C').width = 5;
+    worksheet.getColumn('D').width = 15; // Image area (top logo)
+    worksheet.getColumn('E').width = 5;
+    worksheet.getColumn('F').width = 15; // Image area (BAGONG PILIPINAS logo)
+    
+    // Set header column widths early to ensure they fit within borders
+    worksheet.getColumn('G').width = 20; // Republic/Province/Municipality area
+    worksheet.getColumn('H').width = 5;
+    worksheet.getColumn('I').width = 5;
+    worksheet.getColumn('J').width = 15; // Male/Female/Total counts
+    worksheet.getColumn('K').width = 5;
+    worksheet.getColumn('L').width = 5;
+    worksheet.getColumn('M').width = 5;
+    worksheet.getColumn('N').width = 5;
+    worksheet.getColumn('O').width = 5;
     
     // Header rows (1-5) - with merged cells and centered text
     // Row 1: Republic of the Philippines
@@ -498,6 +513,30 @@ router.get('/export', authenticate, async (req, res) => {
     addRow(['', '', '', '', '', '', '', '', '', '', '', '', '', '', '']);
     
     // Column headers (16-17) - with borders and bold
+    // Set appropriate column widths for data table headers to fit within borders
+    const headerColumnWidths = {
+      'A': 6,   // No.
+      'B': 25,  // NAME OF CHILD
+      'C': 8,   // SEX (fixed)
+      'D': 12,  // 4ps ID Number
+      'E': 12,  // DISABILITY
+      'F': 15,  // BIRTHDATE (M-D-Y)
+      'G': 12,  // AGE IN MONTHS
+      'H': 10,  // HEIGHT
+      'I': 10,  // WEIGHT
+      'J': 15,  // BIRTHPLACE
+      'K': 25,  // ADDRESS
+      'L': 25,  // NAME OF PARENTS/GUARDIAN
+      'M': 15,  // CONTACT NO.
+      'N': 5,   // Empty
+      'O': 5    // Empty
+    };
+    
+    // Apply column widths for data table (overwrite earlier settings for data columns)
+    Object.keys(headerColumnWidths).forEach(col => {
+      worksheet.getColumn(col).width = headerColumnWidths[col];
+    });
+    
     const headerRow1 = worksheet.addRow(['No. ', 'NAME OF CHILD ', 'SEX', '4ps ID Number ', 'DISABILITY', 'BIRTHDATE (M-D-Y)', 'AGE IN MONTHS ', 'HEIGHT', 'WEIGHT ', 'BIRTHPLACE ', 'ADDRESS', 'NAME OF PARENTS/GUARDIAN', 'CONTACT NO. ', '', '']);
     headerRow1.eachCell({ includeEmpty: true }, (cell) => {
       cell.border = borderStyle;
@@ -583,44 +622,59 @@ router.get('/export', authenticate, async (req, res) => {
     addRow(['', '', '', '', '', '', '', '', '', '', '', '', '', '', '']);
     addRow(['', '', '', '', '', '', '', '', '', '', '', '', '', '', '']);
     
-    // Add images - based on the screenshot, image1.png contains the header with both logos
-    // We'll place it to cover the left side (A1:C11) and image.png (BAGONG PILIPINAS) in the header
+    // Add images - positioned in columns D and F
     try {
-      // Image 1: Header section with both logos (PAMAHALAANG BAYAN NG LIAN and MSWDO)
-      // This covers A1 to C11 based on the screenshot
+      // Image 1: Top logo (PAMAHALAANG BAYAN NG LIAN) - in column D, rows 1-5
       const image1Path = path.join(__dirname, '..', 'image1.png');
       if (fs.existsSync(image1Path)) {
         const image1 = workbook.addImage({
           filename: image1Path,
           extension: 'png',
         });
-        // Position: A1 to C11 (rows 1-11, columns A-C)
-        // Calculate approximate dimensions based on column widths
-        const colAWidth = worksheet.getColumn('A').width || 12;
-        const colBWidth = worksheet.getColumn('B').width || 12;
-        const colCWidth = worksheet.getColumn('C').width || 12;
-        const totalWidth = (colAWidth + colBWidth + colCWidth) * 7; // Excel units
-        const totalHeight = 11 * 20; // Approximate row height * 11 rows
+        // Position: Column D (index 3), rows 1-5
+        const colDWidth = worksheet.getColumn('D').width || 15;
+        const totalWidth = colDWidth * 7; // Excel units
+        const totalHeight = 5 * 30; // 5 rows * row height
         
         worksheet.addImage(image1, {
-          tl: { col: 0, row: 0 }, // Top-left: column A (0), row 1 (0)
+          tl: { col: 3, row: 0 }, // Top-left: column D (3), row 1 (0)
           ext: { width: totalWidth, height: totalHeight }
         });
       }
       
-      // Image 2: BAGONG PILIPINAS logo - typically placed in header area
-      // Based on government document standards, it might go above or integrated with header
-      const image2Path = path.join(__dirname, '..', 'image.png');
+      // Image 2: Bottom logo (MSWDO) - in column D, rows 6-11
+      const image2Path = path.join(__dirname, '..', 'image1.png');
       if (fs.existsSync(image2Path)) {
         const image2 = workbook.addImage({
           filename: image2Path,
           extension: 'png',
         });
-        // Position it in the header area - adjust based on exact requirements
-        // Placing it in the merged header area (G1:O1 region)
+        // Position: Column D (index 3), rows 6-11
+        const colDWidth = worksheet.getColumn('D').width || 15;
+        const totalWidth = colDWidth * 7;
+        const totalHeight = 6 * 30; // 6 rows
+        
         worksheet.addImage(image2, {
-          tl: { col: 6, row: 0 }, // Starting at column G (6), row 1 (0)
-          ext: { width: 200, height: 80 } // Adjust size as needed
+          tl: { col: 3, row: 5 }, // Top-left: column D (3), row 6 (5)
+          ext: { width: totalWidth, height: totalHeight }
+        });
+      }
+      
+      // Image 3: BAGONG PILIPINAS logo - in column F
+      const image3Path = path.join(__dirname, '..', 'image.png');
+      if (fs.existsSync(image3Path)) {
+        const image3 = workbook.addImage({
+          filename: image3Path,
+          extension: 'png',
+        });
+        // Position: Column F (index 5), rows 1-5
+        const colFWidth = worksheet.getColumn('F').width || 15;
+        const totalWidth = colFWidth * 7;
+        const totalHeight = 5 * 30;
+        
+        worksheet.addImage(image3, {
+          tl: { col: 5, row: 0 }, // Top-left: column F (5), row 1 (0)
+          ext: { width: totalWidth, height: totalHeight }
         });
       }
     } catch (err) {
@@ -654,34 +708,8 @@ router.get('/export', authenticate, async (req, res) => {
       }
     }
     
-    // Set fixed width for SEX column (column C, index 2) BEFORE auto-fitting others
-    // This ensures MASTERLIST title doesn't affect SEX column width
-    worksheet.getColumn('C').width = 8; // SEX column - fixed width
-    
-    // Auto-fit columns, but preserve logo column widths and SEX column
-    worksheet.columns.forEach((column, index) => {
-      // Skip auto-fit for logo columns (A-C, indices 0-2) - already set
-      if (index < 3) {
-        // Column C (index 2) is SEX - already set to fixed width above
-        return;
-      }
-      
-      let maxLength = 0;
-      column.eachCell({ includeEmpty: true }, (cell) => {
-        const cellValue = cell.value ? cell.value.toString() : '';
-        // Handle rich text
-        if (typeof cellValue === 'object' && cellValue.richText) {
-          const text = cellValue.richText.map(rt => rt.text).join('');
-          if (text.length > maxLength) {
-            maxLength = text.length;
-          }
-        } else if (cellValue.length > maxLength) {
-          maxLength = cellValue.length;
-        }
-      });
-      // Set column width with some padding, but cap at reasonable max
-      column.width = Math.min(Math.max(maxLength + 2, 10), 50);
-    });
+    // Don't auto-fit - use the predefined widths to ensure headers fit within borders
+    // Column widths are already set above for headers, and logo columns are set earlier
     
     // Generate Excel file buffer
     const buffer = await workbook.xlsx.writeBuffer();
