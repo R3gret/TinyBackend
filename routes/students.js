@@ -134,9 +134,42 @@ const toNullableNumber = (value) => {
   return Number.isNaN(parsed) ? null : parsed;
 };
 
+// Helper function to parse academic year and get date range
+// Academic year format: "YYYY-YYYY+1" (e.g., "2025-2026")
+// Academic year spans 10 months: June of first year to March of second year
+const getAcademicYearDateRange = (academicYear) => {
+  if (!academicYear || typeof academicYear !== 'string') {
+    return null;
+  }
+  
+  // Parse "YYYY-YYYY+1" format (e.g., "2025-2026")
+  const match = academicYear.match(/^(\d{4})-(\d{4})$/);
+  if (!match) {
+    return null;
+  }
+  
+  const startYear = parseInt(match[1], 10);
+  const endYear = parseInt(match[2], 10);
+  
+  // Validate that endYear is startYear + 1
+  if (endYear !== startYear + 1) {
+    return null;
+  }
+  
+  // Academic year runs from June (month 6) of startYear to March (month 3) of endYear
+  // This is 10 months: Jun, Jul, Aug, Sep, Oct, Nov, Dec (startYear), Jan, Feb, Mar (endYear)
+  const startDate = new Date(startYear, 5, 1); // June 1 of startYear (month is 0-indexed, so 5 = June)
+  const endDate = new Date(endYear, 2, 31); // March 31 of endYear (month is 0-indexed, so 2 = March)
+  
+  return {
+    startDate: startDate.toISOString().split('T')[0],
+    endDate: endDate.toISOString().split('T')[0]
+  };
+};
+
 // Base student query with CDC filtering
 router.get('/', authenticate, async (req, res) => {
-  const { ageFilter } = req.query;
+  const { ageFilter, academic_year } = req.query;
   let connection;
   
   try {
@@ -152,11 +185,26 @@ router.get('/', authenticate, async (req, res) => {
     connection = await db.promisePool.getConnection();
 
     let query = `
-      SELECT student_id, first_name, middle_name, last_name, birthdate, gender 
+      SELECT student_id, first_name, middle_name, last_name, birthdate, gender, enrolled_at
       FROM students
       WHERE cdc_id = ?
     `;
     const params = [cdcId];
+    
+    // Filter by academic year if provided
+    if (academic_year) {
+      const dateRange = getAcademicYearDateRange(academic_year);
+      if (!dateRange) {
+        return res.status(400).json({
+          success: false,
+          message: 'Invalid academic year format. Expected format: "YYYY-YYYY+1" (e.g., "2025-2026")'
+        });
+      }
+      
+      // Filter by enrolled_at date within the academic year range
+      query += ' AND enrolled_at >= ? AND enrolled_at <= ?';
+      params.push(dateRange.startDate, dateRange.endDate);
+    }
     
     if (ageFilter) {
       const today = new Date();
@@ -233,6 +281,8 @@ router.get('/', authenticate, async (req, res) => {
 
 router.get('/export', authenticate, async (req, res) => {
   const cdcId = req.user?.cdc_id;
+  const { academic_year } = req.query;
+  
   if (!cdcId) {
     return res.status(403).json({
       success: false,
@@ -243,6 +293,18 @@ router.get('/export', authenticate, async (req, res) => {
   let connection;
   try {
     connection = await db.promisePool.getConnection();
+    
+    // Validate and get academic year date range if provided
+    let academicYearDateRange = null;
+    if (academic_year) {
+      academicYearDateRange = getAcademicYearDateRange(academic_year);
+      if (!academicYearDateRange) {
+        return res.status(400).json({
+          success: false,
+          message: 'Invalid academic year format. Expected format: "YYYY-YYYY+1" (e.g., "2025-2026")'
+        });
+      }
+    }
     
     // Get CDC and location information
     const [cdcInfo] = await connection.query(
@@ -303,31 +365,39 @@ router.get('/export', authenticate, async (req, res) => {
     const preparedByName = loggedInName || '_______________________';
 
     // Get all students with their data
-    const [students] = await connection.query(
-      `
-        SELECT 
-          s.student_id,
-          s.first_name,
-          s.middle_name,
-          s.last_name,
-          s.gender,
-          s.birthdate,
-          s.four_ps_id,
-          s.disability,
-          s.height_cm,
-          s.weight_kg,
-          s.birthplace,
-          coi.child_address,
-          g.guardian_name,
-          g.phone_num
-        FROM students s
-        LEFT JOIN child_other_info coi ON coi.student_id = s.student_id
-        LEFT JOIN guardian_info g ON g.student_id = s.student_id
-        WHERE s.cdc_id = ?
-        ORDER BY s.last_name, s.first_name
-      `,
-      [cdcId]
-    );
+    let studentsQuery = `
+      SELECT 
+        s.student_id,
+        s.first_name,
+        s.middle_name,
+        s.last_name,
+        s.gender,
+        s.birthdate,
+        s.enrolled_at,
+        s.four_ps_id,
+        s.disability,
+        s.height_cm,
+        s.weight_kg,
+        s.birthplace,
+        coi.child_address,
+        g.guardian_name,
+        g.phone_num
+      FROM students s
+      LEFT JOIN child_other_info coi ON coi.student_id = s.student_id
+      LEFT JOIN guardian_info g ON g.student_id = s.student_id
+      WHERE s.cdc_id = ?
+    `;
+    const studentsParams = [cdcId];
+    
+    // Add academic year filter if provided
+    if (academicYearDateRange) {
+      studentsQuery += ' AND s.enrolled_at >= ? AND s.enrolled_at <= ?';
+      studentsParams.push(academicYearDateRange.startDate, academicYearDateRange.endDate);
+    }
+    
+    studentsQuery += ' ORDER BY s.last_name, s.first_name';
+    
+    const [students] = await connection.query(studentsQuery, studentsParams);
 
     // Count male and female
     const maleCount = students.filter(s => s.gender === 'Male').length;
@@ -499,7 +569,8 @@ router.get('/export', authenticate, async (req, res) => {
     // Column headers (20-21)
     const headerRow1 = 20;
     setCell(headerRow1, 1, 'No.', { font: { size: 14, bold: true }, alignment: { horizontal: 'center', vertical: 'middle' } });
-    mergeCells(headerRow1, 2, headerRow1 + 1, 3, 'NAME OF CHILD', { font: { size: 14, bold: true }, alignment: { horizontal: 'center', vertical: 'middle' } });
+    // NAME OF CHILD - merge horizontally only (row 20, cols 2-3)
+    mergeCells(headerRow1, 2, headerRow1, 3, 'NAME OF CHILD', { font: { size: 14, bold: true }, alignment: { horizontal: 'center', vertical: 'middle' } });
     setCell(headerRow1, 4, 'SEX', { font: { size: 14, bold: true }, alignment: { horizontal: 'center', vertical: 'middle' } });
     setCell(headerRow1, 5, '4ps ID Number', { font: { size: 14, bold: true }, alignment: { horizontal: 'center', vertical: 'middle' } });
     setCell(headerRow1, 6, 'DISABILITY', { font: { size: 14, bold: true }, alignment: { horizontal: 'center', vertical: 'middle' } });
@@ -509,13 +580,14 @@ router.get('/export', authenticate, async (req, res) => {
     setCell(headerRow1, 10, 'WEIGHT', { font: { size: 14, bold: true }, alignment: { horizontal: 'center', vertical: 'middle' } });
     setCell(headerRow1, 11, 'BIRTHPLACE', { font: { size: 14, bold: true }, alignment: { horizontal: 'center', vertical: 'middle' } });
     setCell(headerRow1, 12, 'ADDRESS', { font: { size: 14, bold: true }, alignment: { horizontal: 'center', vertical: 'middle' } });
-    mergeCells(headerRow1, 13, headerRow1 + 1, 14, 'NAME OF PARENTS/GUARDIAN', { font: { size: 14, bold: true }, alignment: { horizontal: 'center', vertical: 'middle' } });
+    // NAME OF PARENTS/GUARDIAN - merge horizontally only (row 20, cols 13-14)
+    mergeCells(headerRow1, 13, headerRow1, 14, 'NAME OF PARENTS/GUARDIAN', { font: { size: 14, bold: true }, alignment: { horizontal: 'center', vertical: 'middle' } });
     setCell(headerRow1, 15, 'CONTACT NO.', { font: { size: 14, bold: true }, alignment: { horizontal: 'center', vertical: 'middle' } });
     
     // Sub-header row (21)
     const headerRow2 = 21;
     setCell(headerRow2, 1, '', { font: { size: 14, bold: true } });
-    // NAME OF CHILD sub-header - merge cells 2-3
+    // NAME OF CHILD sub-header - merge cells 2-3 horizontally (separate from row 20)
     mergeCells(headerRow2, 2, headerRow2, 3, '(Last Name, First Name, Middle Initial)', { font: { size: 14 }, alignment: { horizontal: 'center', vertical: 'middle' } });
     setCell(headerRow2, 4, '', { font: { size: 14, bold: true } });
     setCell(headerRow2, 5, '', { font: { size: 14, bold: true } });
@@ -526,9 +598,8 @@ router.get('/export', authenticate, async (req, res) => {
     setCell(headerRow2, 10, '', { font: { size: 14, bold: true } });
     setCell(headerRow2, 11, '', { font: { size: 14, bold: true } });
     setCell(headerRow2, 12, '', { font: { size: 14, bold: true } });
-    // NAME OF PARENTS/GUARDIAN sub-header - already merged in row 20, so cells 13-14 are empty in row 21
-    setCell(headerRow2, 13, '', { font: { size: 14, bold: true } });
-    setCell(headerRow2, 14, '', { font: { size: 14, bold: true } });
+    // NAME OF PARENTS/GUARDIAN sub-header - merge cells 13-14 horizontally (separate from row 20)
+    mergeCells(headerRow2, 13, headerRow2, 14, '', { font: { size: 14, bold: true } });
     setCell(headerRow2, 15, '', { font: { size: 14, bold: true } });
     
     // Data rows (22-46) - up to 25 rows
