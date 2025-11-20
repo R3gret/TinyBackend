@@ -2,9 +2,150 @@ const express = require('express');
 const router = express.Router();
 const db = require('../db');
 const jwt = require('jsonwebtoken');
+const multer = require('multer');
+const csvParser = require('csv-parser');
+const { Parser } = require('json2csv');
+const { Readable } = require('stream');
+const moment = require('moment');
 
 // Middleware to get CDC ID from JWT
 const authenticate = require('./authMiddleware');
+
+const csvFields = [
+  { label: 'No.', value: 'rowNumber' },
+  { label: 'Name of Child', value: 'nameOfChild' },
+  { label: 'Sex', value: 'sex' },
+  { label: '4Ps ID Number', value: 'fourPsIdNumber' },
+  { label: 'Disability (Y/N)', value: 'disability' },
+  { label: 'Birthdate (M-D-Y)', value: 'birthdate' },
+  { label: 'Age in Months', value: 'ageInMonths' },
+  { label: 'Height (cm)', value: 'heightCm' },
+  { label: 'Weight (kg)', value: 'weightKg' },
+  { label: 'Birthplace', value: 'birthplace' },
+  { label: 'Address', value: 'address' },
+  { label: 'Parent/Guardian Name', value: 'guardianName' },
+  { label: 'Contact No.', value: 'contactNo' }
+];
+
+const upload = multer({
+  storage: multer.memoryStorage(),
+  limits: { fileSize: 2 * 1024 * 1024 },
+  fileFilter: (req, file, cb) => {
+    if (
+      (file.mimetype && file.mimetype.includes('csv')) ||
+      file.originalname.toLowerCase().endsWith('.csv')
+    ) {
+      cb(null, true);
+    } else {
+      cb(new Error('Only CSV files are allowed.'));
+    }
+  }
+});
+
+const handleCsvUpload = (req, res, next) => {
+  upload.single('file')(req, res, (err) => {
+    if (err) {
+      return res.status(400).json({
+        success: false,
+        message: err.message || 'Invalid CSV upload.'
+      });
+    }
+    next();
+  });
+};
+
+const formatChildName = (student) => {
+  const parts = [
+    student.last_name?.trim(),
+    [student.first_name, student.middle_name].filter(Boolean).join(' ').trim()
+  ];
+  return parts.filter(Boolean).join(', ');
+};
+
+const formatDateForCsv = (date) => {
+  if (!date) return '';
+  const parsed = moment(date);
+  return parsed.isValid() ? parsed.format('MM-DD-YYYY') : '';
+};
+
+const calculateAgeInMonths = (date) => {
+  if (!date) return '';
+  const birth = moment(date);
+  if (!birth.isValid()) return '';
+  return moment().diff(birth, 'months');
+};
+
+const normalizeYesNo = (value, defaultValue = 'N') => {
+  if (!value) return defaultValue;
+  const upper = value.toString().trim().toUpperCase();
+  if (upper === 'Y') return 'Y';
+  if (upper === 'N') return 'N';
+  return defaultValue;
+};
+
+const parseCsvBuffer = (buffer) =>
+  new Promise((resolve, reject) => {
+    const rows = [];
+    Readable.from(buffer.toString('utf8'))
+      .pipe(csvParser({
+        mapHeaders: ({ header }) => header.trim()
+      }))
+      .on('data', (data) => {
+        const hasValues = Object.values(data).some(
+          (value) => value && value.toString().trim().length > 0
+        );
+        if (hasValues) rows.push(data);
+      })
+      .on('end', () => resolve(rows))
+      .on('error', reject);
+  });
+
+const splitChildName = (value = '') => {
+  const [lastNamePart, rest] = value.split(',');
+  const lastName = (lastNamePart || '').trim();
+  const remaining = (rest || '').trim();
+  const segments = remaining.split(/\s+/).filter(Boolean);
+  const firstName = segments.shift() || '';
+  const middleName = segments.length ? segments.join(' ') : null;
+  return { firstName, middleName, lastName };
+};
+
+const parseGender = (value) => {
+  if (!value) return null;
+  const normalized = value.toString().trim().toLowerCase();
+  if (normalized.startsWith('m')) return 'Male';
+  if (normalized.startsWith('f')) return 'Female';
+  return null;
+};
+
+const parseBirthdateFromCsv = (value) => {
+  if (!value) return null;
+  const normalized = value.toString().trim();
+  const formats = [
+    'MM-DD-YYYY',
+    'M-D-YYYY',
+    'MM/DD/YYYY',
+    'M/D/YYYY',
+    'YYYY-MM-DD',
+    'YYYY/M/D'
+  ];
+  for (const format of formats) {
+    const parsed = moment(normalized, format, true);
+    if (parsed.isValid()) {
+      return parsed.format('YYYY-MM-DD');
+    }
+  }
+  const fallback = moment(new Date(normalized));
+  return fallback.isValid() ? fallback.format('YYYY-MM-DD') : null;
+};
+
+const toNullableNumber = (value) => {
+  if (value === undefined || value === null) return null;
+  const normalized = value.toString().replace(',', '.').trim();
+  if (normalized.length === 0) return null;
+  const parsed = parseFloat(normalized);
+  return Number.isNaN(parsed) ? null : parsed;
+};
 
 // Base student query with CDC filtering
 router.get('/', authenticate, async (req, res) => {
@@ -97,6 +238,217 @@ router.get('/', authenticate, async (req, res) => {
     return res.status(500).json({ 
       success: false, 
       message: 'Database error' 
+    });
+  } finally {
+    if (connection) connection.release();
+  }
+});
+
+router.get('/export', async (req, res) => {
+  const cdcId = req.user?.cdc_id;
+  if (!cdcId) {
+    return res.status(403).json({
+      success: false,
+      message: 'Access denied. User is not associated with a CDC.'
+    });
+  }
+
+  let connection;
+  try {
+    connection = await db.promisePool.getConnection();
+    const [students] = await connection.query(
+      `
+        SELECT 
+          s.student_id,
+          s.first_name,
+          s.middle_name,
+          s.last_name,
+          s.gender,
+          s.birthdate,
+          s.four_ps_id,
+          s.disability,
+          s.height_cm,
+          s.weight_kg,
+          s.birthplace,
+          coi.child_address,
+          g.guardian_name,
+          g.phone_num
+        FROM students s
+        LEFT JOIN child_other_info coi ON coi.student_id = s.student_id
+        LEFT JOIN guardian_info g ON g.student_id = s.student_id
+        WHERE s.cdc_id = ?
+        ORDER BY s.last_name, s.first_name
+      `,
+      [cdcId]
+    );
+
+    const csvRows = students.map((student, index) => ({
+      rowNumber: index + 1,
+      nameOfChild: formatChildName(student),
+      sex: student.gender || '',
+      fourPsIdNumber: student.four_ps_id || '',
+      disability: normalizeYesNo(student.disability, ''),
+      birthdate: formatDateForCsv(student.birthdate),
+      ageInMonths: calculateAgeInMonths(student.birthdate),
+      heightCm: student.height_cm ?? '',
+      weightKg: student.weight_kg ?? '',
+      birthplace: student.birthplace ?? '',
+      address: student.child_address ?? '',
+      guardianName: student.guardian_name ?? '',
+      contactNo: student.phone_num ?? ''
+    }));
+
+    const parser = new Parser({
+      fields: csvFields,
+      excelStrings: true,
+      withBOM: true
+    });
+    const csv = parser.parse(csvRows);
+
+    const timestamp = new Date().toISOString().split('T')[0];
+    res.setHeader('Content-Type', 'text/csv');
+    res.setHeader(
+      'Content-Disposition',
+      `attachment; filename="cdc-students-${timestamp}.csv"`
+    );
+    return res.status(200).send(csv);
+  } catch (err) {
+    console.error('CSV export error:', err);
+    return res.status(500).json({
+      success: false,
+      message: 'Failed to export students.'
+    });
+  } finally {
+    if (connection) connection.release();
+  }
+});
+
+router.post('/import', handleCsvUpload, async (req, res) => {
+  const cdcId = req.user?.cdc_id;
+  if (!cdcId) {
+    return res.status(403).json({
+      success: false,
+      message: 'Access denied. User is not associated with a CDC.'
+    });
+  }
+
+  if (!req.file) {
+    return res.status(400).json({
+      success: false,
+      message: 'No CSV file uploaded.'
+    });
+  }
+
+  let rows;
+  try {
+    rows = await parseCsvBuffer(req.file.buffer);
+  } catch (err) {
+    console.error('CSV parse error:', err);
+    return res.status(400).json({
+      success: false,
+      message: 'Unable to read CSV file.'
+    });
+  }
+
+  if (!rows.length) {
+    return res.status(400).json({
+      success: false,
+      message: 'CSV file is empty.'
+    });
+  }
+
+  const summary = { inserted: 0, skipped: 0 };
+  let connection;
+
+  try {
+    connection = await db.promisePool.getConnection();
+    await connection.beginTransaction();
+
+    for (const row of rows) {
+      const nameValue = row['Name of Child'] || row['nameOfChild'];
+      const { firstName, middleName, lastName } = splitChildName(nameValue || '');
+      const gender = parseGender(row['Sex'] || row['sex']);
+      const birthdate = parseBirthdateFromCsv(row['Birthdate (M-D-Y)'] || row['birthdate']);
+      const guardianName = (row['Parent/Guardian Name'] || row['guardianName'] || '').trim() || 'Unknown';
+      const address = (row['Address'] || row['address'] || '').trim() || null;
+      const contactNo = (row['Contact No.'] || row['contactNo'] || '').trim() || null;
+      const fourPsId = (row['4Ps ID Number'] || row['fourPsIdNumber'] || '').trim() || null;
+      const disability = normalizeYesNo(row['Disability (Y/N)'] || row['disability'], null);
+      const height = toNullableNumber(row['Height (cm)'] || row['heightCm']);
+      const weight = toNullableNumber(row['Weight (kg)'] || row['weightKg']);
+      const birthplace = (row['Birthplace'] || row['birthplace'] || '').trim() || null;
+
+      if (!firstName || !lastName || !gender || !birthdate) {
+        summary.skipped += 1;
+        continue;
+      }
+
+      const [existing] = await connection.query(
+        `SELECT student_id 
+         FROM students 
+         WHERE first_name = ? 
+           AND last_name = ?
+           AND birthdate = ?
+           AND cdc_id = ?
+         LIMIT 1`,
+        [firstName, lastName, birthdate, cdcId]
+      );
+
+      if (existing.length) {
+        summary.skipped += 1;
+        continue;
+      }
+
+      const [studentInsert] = await connection.query(
+        `INSERT INTO students 
+          (first_name, middle_name, last_name, birthdate, gender, cdc_id, enrolled_at, four_ps_id, disability, height_cm, weight_kg, birthplace)
+         VALUES (?, ?, ?, ?, ?, ?, CURDATE(), ?, ?, ?, ?, ?)`,
+        [
+          firstName,
+          middleName,
+          lastName,
+          birthdate,
+          gender,
+          cdcId,
+          fourPsId,
+          disability,
+          height,
+          weight,
+          birthplace
+        ]
+      );
+
+      const studentId = studentInsert.insertId;
+
+      await connection.query(
+        `INSERT INTO child_other_info 
+          (student_id, child_address, first_language, second_language)
+         VALUES (?, ?, NULL, NULL)`,
+        [studentId, address]
+      );
+
+      await connection.query(
+        `INSERT INTO guardian_info 
+          (student_id, guardian_name, relationship, email_address, phone_num, address)
+         VALUES (?, ?, 'Parent/Guardian', NULL, ?, ?)`,
+        [studentId, guardianName, contactNo, address]
+      );
+
+      summary.inserted += 1;
+    }
+
+    await connection.commit();
+    return res.json({
+      success: true,
+      message: 'CSV import completed.',
+      summary
+    });
+  } catch (err) {
+    if (connection) await connection.rollback();
+    console.error('CSV import error:', err);
+    return res.status(500).json({
+      success: false,
+      message: 'Failed to import students.'
     });
   } finally {
     if (connection) connection.release();
