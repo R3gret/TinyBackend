@@ -6,17 +6,39 @@ const path = require('path');
 const fs = require('fs');
 const crypto = require('crypto');
 
-// Configure multer for file uploads
+// Helper function to sanitize file path
+const sanitizePath = (filePath) => {
+  if (!filePath) return null;
+  // Remove any path traversal attempts and normalize
+  return filePath
+    .replace(/\.\./g, '') // Remove ..
+    .replace(/[^a-zA-Z0-9_\/\-]/g, '') // Remove special chars except /, _, -
+    .replace(/\/+/g, '/') // Replace multiple slashes with single
+    .replace(/^\/|\/$/g, ''); // Remove leading/trailing slashes
+};
+
+// Helper function to create directory recursively
+const ensureDirectoryExists = (dirPath) => {
+  if (!fs.existsSync(dirPath)) {
+    fs.mkdirSync(dirPath, { recursive: true });
+  }
+};
+
+// Configure multer for file uploads with dynamic destination based on category
+// Note: Multer destination callback doesn't support async/await directly,
+// so we'll handle path resolution in the upload route instead
 const storage = multer.diskStorage({
   destination: (req, file, cb) => {
-    const uploadDir = path.join(__dirname, '../uploads');
-    if (!fs.existsSync(uploadDir)) {
-      fs.mkdirSync(uploadDir);
-    }
-    cb(null, uploadDir);
+    // For now, use base upload directory
+    // The actual folder structure will be handled in the upload route
+    const baseUploadDir = path.join(__dirname, '../uploads');
+    ensureDirectoryExists(baseUploadDir);
+    cb(null, baseUploadDir);
   },
   filename: (req, file, cb) => {
-    cb(null, `${Date.now()}-${file.originalname}`);
+    // Use provided file_name or generate one
+    const fileName = req.body.file_name || `${Date.now()}-${file.originalname}`;
+    cb(null, fileName);
   }
 });
 
@@ -189,7 +211,7 @@ router.get('/get-categories', async (req, res) => {
 
 // POST /api/files/categories - Create a new category (available to all if cdc_id is null, or for user's CDC)
 router.post('/categories', async (req, res) => {
-  const { category_name } = req.body;
+  const { category_name, file_path } = req.body;
   const { cdc_id: userCdcId } = req.user || {};
 
   if (!category_name) {
@@ -199,16 +221,38 @@ router.post('/categories', async (req, res) => {
   let connection;
   try {
     connection = await db.promisePool.getConnection();
+    
+    // Sanitize file_path if provided
+    const sanitizedPath = file_path ? sanitizePath(file_path) : null;
+    
     // If userCdcId is null, create category available to all (cdc_id = NULL)
     // If userCdcId is provided, create category for that CDC
     const [result] = await connection.query(
-      'INSERT INTO domain_file_categories (category_name, cdc_id) VALUES (?, ?)',
-      [category_name, userCdcId || null]
+      'INSERT INTO domain_file_categories (category_name, file_path, cdc_id) VALUES (?, ?, ?)',
+      [category_name, sanitizedPath, userCdcId || null]
     );
+
+    // Create physical folder structure if file_path is provided
+    if (sanitizedPath) {
+      try {
+        const baseUploadDir = path.join(__dirname, '../uploads');
+        const fullPath = path.join(baseUploadDir, sanitizedPath);
+        ensureDirectoryExists(fullPath);
+      } catch (folderErr) {
+        console.error('Error creating category folder:', folderErr);
+        // Don't fail the request if folder creation fails, but log it
+      }
+    }
+
     res.status(201).json({
       success: true,
       message: 'Category created successfully',
-      category: { category_id: result.insertId, category_name, cdc_id: userCdcId || null }
+      category: { 
+        category_id: result.insertId, 
+        category_name, 
+        file_path: sanitizedPath,
+        cdc_id: userCdcId || null 
+      }
     });
   } catch (err) {
     console.error('Database query error:', err);
@@ -228,7 +272,7 @@ router.post('/categories', async (req, res) => {
 // PUT /api/files/categories/:id - Update a category (available to all or within user's CDC)
 router.put('/categories/:id', async (req, res) => {
   const { id } = req.params;
-  const { category_name } = req.body;
+  const { category_name, file_path } = req.body;
   const { cdc_id: userCdcId } = req.user || {};
 
   if (!category_name) {
@@ -239,21 +283,46 @@ router.put('/categories/:id', async (req, res) => {
   try {
     connection = await db.promisePool.getConnection();
     
+    // Sanitize file_path if provided
+    const sanitizedPath = file_path ? sanitizePath(file_path) : null;
+    
     // If userCdcId is null, allow updating only categories available to all (cdc_id IS NULL)
     // If userCdcId is provided, allow updating categories available to all OR belonging to that CDC
     let query, params;
     if (!userCdcId) {
-      query = 'UPDATE domain_file_categories SET category_name = ? WHERE category_id = ? AND cdc_id IS NULL';
-      params = [category_name, id];
+      if (sanitizedPath !== null) {
+        query = 'UPDATE domain_file_categories SET category_name = ?, file_path = ? WHERE category_id = ? AND cdc_id IS NULL';
+        params = [category_name, sanitizedPath, id];
+      } else {
+        query = 'UPDATE domain_file_categories SET category_name = ? WHERE category_id = ? AND cdc_id IS NULL';
+        params = [category_name, id];
+      }
     } else {
-      query = 'UPDATE domain_file_categories SET category_name = ? WHERE category_id = ? AND (cdc_id IS NULL OR cdc_id = ?)';
-      params = [category_name, id, userCdcId];
+      if (sanitizedPath !== null) {
+        query = 'UPDATE domain_file_categories SET category_name = ?, file_path = ? WHERE category_id = ? AND (cdc_id IS NULL OR cdc_id = ?)';
+        params = [category_name, sanitizedPath, id, userCdcId];
+      } else {
+        query = 'UPDATE domain_file_categories SET category_name = ? WHERE category_id = ? AND (cdc_id IS NULL OR cdc_id = ?)';
+        params = [category_name, id, userCdcId];
+      }
     }
     
     const [result] = await connection.query(query, params);
 
     if (result.affectedRows === 0) {
       return res.status(404).json({ success: false, message: 'Category not found or you do not have permission to update it' });
+    }
+
+    // Create physical folder structure if file_path is provided
+    if (sanitizedPath) {
+      try {
+        const baseUploadDir = path.join(__dirname, '../uploads');
+        const fullPath = path.join(baseUploadDir, sanitizedPath);
+        ensureDirectoryExists(fullPath);
+      } catch (folderErr) {
+        console.error('Error creating category folder:', folderErr);
+        // Don't fail the request if folder creation fails
+      }
     }
 
     res.json({
@@ -333,15 +402,17 @@ router.get('/download/:fileId', async (req, res) => {
     let query, params;
     if (!userCdcId) {
       query = `
-        SELECT f.file_name, f.file_type, f.file_path 
+        SELECT f.file_name, f.file_type, f.file_path, fc.file_path as category_file_path
         FROM files f
+        LEFT JOIN domain_file_categories fc ON f.category_id = fc.category_id
         WHERE f.file_id = ? AND f.cdc_id IS NULL
       `;
       params = [fileId];
     } else {
       query = `
-        SELECT f.file_name, f.file_type, f.file_path 
+        SELECT f.file_name, f.file_type, f.file_path, fc.file_path as category_file_path
         FROM files f
+        LEFT JOIN domain_file_categories fc ON f.category_id = fc.category_id
         WHERE f.file_id = ? AND (f.cdc_id IS NULL OR f.cdc_id = ?)
       `;
       params = [fileId, userCdcId];
@@ -358,8 +429,19 @@ router.get('/download/:fileId', async (req, res) => {
 
     const file = results[0];
     
+    // Use file_path from database (full path) or construct from category_file_path
+    let filePath = file.file_path;
+    
+    // If file_path doesn't exist or file doesn't exist at that path, try constructing from category
+    if (!filePath || !fs.existsSync(filePath)) {
+      if (file.category_file_path) {
+        const baseUploadDir = path.join(__dirname, '../uploads');
+        filePath = path.join(baseUploadDir, file.category_file_path, file.file_name);
+      }
+    }
+    
     // Check if the file exists on the filesystem
-    if (!fs.existsSync(file.file_path)) {
+    if (!filePath || !fs.existsSync(filePath)) {
         return res.status(404).json({
             success: false,
             message: 'File not found on server.'
@@ -367,7 +449,7 @@ router.get('/download/:fileId', async (req, res) => {
     }
 
     // Stream the file for download
-    res.download(file.file_path, file.file_name, (err) => {
+    res.download(filePath, file.file_name, (err) => {
         if (err) {
             console.error('File download error:', err);
             // Don't try to send another response if headers are already sent
@@ -577,7 +659,7 @@ router.post('/multi-cdc-upload', upload.array('files', 25), async (req, res) => 
 
 // POST /api/files - Handles file uploads (available to all if cdc_id is null, or for user's CDC)
 router.post('/', upload.single('file_data'), async (req, res) => {
-  const { category_id, file_name } = req.body;
+  const { category_id, file_name, file_path: providedFilePath } = req.body;
   const file = req.file;
   const { id: userId, cdc_id: userCdcId } = req.user || {};
 
@@ -601,6 +683,40 @@ router.post('/', upload.single('file_data'), async (req, res) => {
   try {
     connection = await db.promisePool.getConnection();
 
+    // Get file_path from category if not provided
+    let categoryFilePath = providedFilePath;
+    if (!categoryFilePath) {
+      const [categories] = await connection.query(
+        'SELECT file_path FROM domain_file_categories WHERE category_id = ?',
+        [category_id]
+      );
+      if (categories.length > 0 && categories[0].file_path) {
+        categoryFilePath = categories[0].file_path;
+      }
+    }
+
+    const baseUploadDir = path.join(__dirname, '../uploads');
+    
+    // Move file to correct folder structure if category has file_path
+    let finalFilePath = file.path; // Default to original path
+    
+    if (categoryFilePath) {
+      const sanitizedPath = sanitizePath(categoryFilePath);
+      const targetDir = path.join(baseUploadDir, sanitizedPath);
+      ensureDirectoryExists(targetDir);
+      
+      const targetPath = path.join(targetDir, file.filename);
+      
+      // Move file to the correct location
+      try {
+        fs.renameSync(file.path, targetPath);
+        finalFilePath = targetPath;
+      } catch (moveErr) {
+        console.error('Error moving file to category folder:', moveErr);
+        // Continue with original path if move fails
+      }
+    }
+
     // If userCdcId is null, upload file available to all (cdc_id = NULL)
     // If userCdcId is provided, upload file for that CDC
     const [result] = await connection.query(
@@ -611,7 +727,7 @@ router.post('/', upload.single('file_data'), async (req, res) => {
         category_id, 
         file_name, 
         file.mimetype, 
-        file.path,
+        finalFilePath.replace(/\\/g, '/'), // Store full path
         userCdcId || null,
         userId
       ]
@@ -790,6 +906,91 @@ router.get('/', async (req, res) => {
     return res.status(500).json({ 
       success: false, 
       message: 'Failed to fetch files' 
+    });
+  } finally {
+    if (connection) connection.release();
+  }
+});
+
+// POST /api/files/initialize-structure - Initialize all folder structures (Optional)
+router.post('/initialize-structure', async (req, res) => {
+  // Define all category paths based on the folder structure
+  const domains = [
+    'Cognitive_Pangkaisipan',
+    'Expressive_Language_Pang-wika',
+    'Fine_Motor_Pangkamay',
+    'Gross_Motor_Panlahat_na_Kakayahan',
+    'Receptive_Language_Pang-unawa',
+    'Self-Help_Pansarili_Pagdadamit',
+    'Self-Help_Pansarili_Pagkain',
+    'Self-Help_Pansarili_Pagligo',
+    'Self-Help_Pansarili_Toileting',
+    'Social-Emotional_Panlipunan'
+  ];
+
+  const quarters = ['1st_Quarter', '2nd_Quarter', '3rd_Quarter', '4th_Quarter'];
+  const materialTypes = ['English', 'Filipino', 'Supplemental_Materials'];
+
+  const allPaths = [];
+  
+  // Generate all category paths
+  domains.forEach(domain => {
+    quarters.forEach(quarter => {
+      materialTypes.forEach(materialType => {
+        const filePath = `${domain}/${quarter}/${materialType}`;
+        const categoryName = `${domain.replace(/_/g, ' / ')} > ${quarter.replace(/_/g, ' ')} > ${materialType}`;
+        allPaths.push({ categoryName, filePath });
+      });
+    });
+  });
+
+  let connection;
+  const results = { created: [], skipped: [], errors: [] };
+
+  try {
+    connection = await db.promisePool.getConnection();
+    const baseUploadDir = path.join(__dirname, '../uploads');
+
+    for (const pathInfo of allPaths) {
+      try {
+        // Check if category exists
+        const [existing] = await connection.query(
+          'SELECT category_id FROM domain_file_categories WHERE category_name = ?',
+          [pathInfo.categoryName]
+        );
+
+        if (existing.length === 0) {
+          // Create category
+          await connection.query(
+            'INSERT INTO domain_file_categories (category_name, file_path, cdc_id) VALUES (?, ?, NULL)',
+            [pathInfo.categoryName, pathInfo.filePath]
+          );
+
+          // Create physical folder
+          const fullPath = path.join(baseUploadDir, pathInfo.filePath);
+          ensureDirectoryExists(fullPath);
+
+          results.created.push(pathInfo.categoryName);
+        } else {
+          results.skipped.push(pathInfo.categoryName);
+        }
+      } catch (err) {
+        console.error(`Error creating ${pathInfo.categoryName}:`, err);
+        results.errors.push({ category: pathInfo.categoryName, error: err.message });
+      }
+    }
+
+    return res.json({
+      success: true,
+      message: 'Folder structure initialization completed',
+      results
+    });
+  } catch (err) {
+    console.error('Initialization error:', err);
+    return res.status(500).json({
+      success: false,
+      message: 'Failed to initialize folder structure',
+      error: process.env.NODE_ENV === 'development' ? err.message : undefined
     });
   } finally {
     if (connection) connection.release();

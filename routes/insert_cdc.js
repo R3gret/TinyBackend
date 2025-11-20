@@ -487,6 +487,73 @@ router.get('/preslist', async (req, res) => {
     }
   });
 
+  // Get unassigned CD workers endpoint - MUST be before /:id and other GET routes
+  router.get('/workers/unassigned', authenticate, async (req, res) => {
+    let connection;
+    try {
+      connection = await db.promisePool.getConnection();
+      
+      // Get unassigned workers (type='worker' and cdc_id IS NULL)
+      // Note: user_other_info may not have first_name/last_name, so we use full_name
+      const [workers] = await connection.query(
+        `SELECT 
+          u.id,
+          u.username,
+          u.email,
+          u.type,
+          u.cdc_id,
+          uoi.full_name
+        FROM users u
+        LEFT JOIN user_other_info uoi ON u.id = uoi.user_id
+        WHERE u.type = 'worker' 
+          AND (u.cdc_id IS NULL OR u.cdc_id = 0)
+        ORDER BY u.username`
+      );
+
+      // Format the response to match expected structure
+      // Parse full_name into first_name and last_name if available
+      const formattedWorkers = workers.map(worker => {
+        let first_name = null;
+        let last_name = null;
+        
+        if (worker.full_name) {
+          const nameParts = worker.full_name.trim().split(/\s+/);
+          if (nameParts.length >= 2) {
+            first_name = nameParts[0];
+            last_name = nameParts.slice(1).join(' ');
+          } else if (nameParts.length === 1) {
+            first_name = nameParts[0];
+          }
+        }
+        
+        return {
+          id: worker.id,
+          username: worker.username,
+          first_name: first_name,
+          last_name: last_name,
+          email: worker.email || null,
+          type: worker.type,
+          cdc_id: worker.cdc_id
+        };
+      });
+
+      return res.json({
+        success: true,
+        data: formattedWorkers
+      });
+    } catch (err) {
+      console.error('Error fetching unassigned workers:', err);
+      return res.status(500).json({
+        success: false,
+        message: 'Failed to fetch unassigned workers',
+        error: process.env.NODE_ENV === 'development' ? err.message : undefined,
+        details: process.env.NODE_ENV === 'development' ? err.stack : undefined
+      });
+    } finally {
+      if (connection) await connection.release();
+    }
+  });
+
   // Get all CDCs with filtering and pagination
   // Automatically filters by user's province and municipality from their profile
   router.get('/', authenticate, async (req, res) => {
@@ -777,58 +844,7 @@ router.get('/preslist', async (req, res) => {
     }
   });
 
-  // Get unassigned CD workers endpoint
-  router.get('/workers/unassigned', authenticate, async (req, res) => {
-    let connection;
-    try {
-      connection = await db.promisePool.getConnection();
-      
-      // Get unassigned workers (type='worker' and cdc_id IS NULL)
-      const [workers] = await connection.query(
-        `SELECT 
-          u.id,
-          u.username,
-          u.email,
-          u.type,
-          u.cdc_id,
-          uoi.full_name,
-          uoi.first_name,
-          uoi.last_name
-        FROM users u
-        LEFT JOIN user_other_info uoi ON u.id = uoi.user_id
-        WHERE u.type = 'worker' 
-          AND (u.cdc_id IS NULL OR u.cdc_id = 0)
-        ORDER BY u.username`
-      );
-
-      // Format the response to match expected structure
-      const formattedWorkers = workers.map(worker => ({
-        id: worker.id,
-        username: worker.username,
-        first_name: worker.first_name || null,
-        last_name: worker.last_name || null,
-        email: worker.email || null,
-        type: worker.type,
-        cdc_id: worker.cdc_id
-      }));
-
-      return res.json({
-        success: true,
-        data: formattedWorkers
-      });
-    } catch (err) {
-      console.error('Error fetching unassigned workers:', err);
-      return res.status(500).json({
-        success: false,
-        message: 'Failed to fetch unassigned workers',
-        error: process.env.NODE_ENV === 'development' ? err.message : undefined
-      });
-    } finally {
-      if (connection) await connection.release();
-    }
-  });
-
-  // Get single CDC by ID
+  // Get single CDC by ID - This must come AFTER specific routes like /workers/unassigned
   router.get('/:id', async (req, res) => {
     const { id } = req.params;
 
