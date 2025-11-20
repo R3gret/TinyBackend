@@ -456,7 +456,7 @@ router.get('/export', authenticate, async (req, res) => {
         // C5-C8: col 2 (C), rows 4-7 (5-8 in 1-indexed, but 0-indexed for ExcelJS)
         worksheet.addImage(image1, {
           tl: { col: 2, row: 4 }, // Top-left: C5
-          ext: { width: 240, height: 160 } // Enlarged images spanning 4 rows
+          ext: { width: 240, height: 160 } // image.png - keep original size
         });
       }
       
@@ -465,10 +465,10 @@ router.get('/export', authenticate, async (req, res) => {
           filename: image2Path,
           extension: 'png',
         });
-        // E5-E8: col 4 (E), rows 4-7
+        // E5-E8: col 4 (E), rows 4-7 - image1.png (enlarged)
         worksheet.addImage(image2, {
           tl: { col: 4, row: 4 }, // Top-left: E5
-          ext: { width: 240, height: 160 } // Enlarged images spanning 4 rows
+          ext: { width: 360, height: 240 } // Enlarged image1.png only
         });
       }
     } catch (err) {

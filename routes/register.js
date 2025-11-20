@@ -11,13 +11,38 @@ router.post('/', authenticate, async (req, res) => {
     guardianName, guardianRelationship, guardianEmail, guardianPhone, guardianAddress,
     motherName, motherOccupation, motherAddress, motherContactHome, motherContactWork,
     fatherName, fatherOccupation, fatherAddress, fatherContactHome, fatherContactWork,
-    emergencyName, emergencyRelationship, emergencyContactHome, emergencyContactWork
+    emergencyName, emergencyRelationship, emergencyContactHome, emergencyContactWork,
+    studentId  // Manual student ID provided by user (format: YYYY-MM-DD)
   } = req.body;
-
-  
 
   if (!childFirstName || !childLastName || !guardianName || !motherName || !fatherName) {
     return res.status(400).json({ success: false, message: 'Required fields are missing.' });
+  }
+
+  // Validate manual student ID
+  if (!studentId) {
+    return res.status(400).json({ 
+      success: false, 
+      message: 'Student ID is required. Format: YYYY-MM-DD (e.g., 2025-01-01)' 
+    });
+  }
+
+  // Validate format: YYYY-MM-DD
+  const idPattern = /^\d{4}-\d{2}-\d{2}$/;
+  if (!idPattern.test(studentId)) {
+    return res.status(400).json({ 
+      success: false, 
+      message: 'Invalid student ID format. Expected format: YYYY-MM-DD (e.g., 2025-01-01)' 
+    });
+  }
+
+  // Validate date parts
+  const [year, month, day] = studentId.split('-').map(Number);
+  if (year < 2000 || year > 2100 || month < 1 || month > 12 || day < 1 || day > 31) {
+    return res.status(400).json({ 
+      success: false, 
+      message: 'Invalid student ID. Year must be 2000-2100, month 01-12, day 01-31' 
+    });
   }
 
   let connection;
@@ -27,12 +52,27 @@ router.post('/', authenticate, async (req, res) => {
     connection = await db.promisePool.getConnection();
     await connection.beginTransaction();
 
-    // Step 1: Insert into students
+    // Check if student ID already exists
+    const [existing] = await connection.query(
+      `SELECT student_id FROM students WHERE student_id = ? LIMIT 1`,
+      [studentId]
+    );
+
+    if (existing.length > 0) {
+      await connection.rollback();
+      return res.status(400).json({ 
+        success: false, 
+        message: `Student ID "${studentId}" already exists. Please use a different ID.` 
+      });
+    }
+
+    // Step 1: Insert into students with manual student_id
     const studentQuery = `INSERT INTO students 
-      (first_name, middle_name, last_name, birthdate, gender, cdc_id, enrolled_at, four_ps_id, disability, height_cm, weight_kg, birthplace) 
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`;
+      (student_id, first_name, middle_name, last_name, birthdate, gender, cdc_id, enrolled_at, four_ps_id, disability, height_cm, weight_kg, birthplace) 
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`;
     
-    const [studentResults] = await connection.query(studentQuery, [
+    await connection.query(studentQuery, [
+      studentId,  // Manual student ID
       childFirstName, 
       childMiddleName, 
       childLastName, 
@@ -46,8 +86,6 @@ router.post('/', authenticate, async (req, res) => {
       childWeightKg || null,
       childBirthplace || null
     ]);
-
-    const studentId = studentResults.insertId;
     
 
     // Step 2: Insert into child_other_info
@@ -118,8 +156,12 @@ router.post('/', authenticate, async (req, res) => {
     ]);
 
     await connection.commit();
-    console.log('All data inserted for student ID');
-    return res.json({ success: true, message: 'Registration successful', studentId });
+    console.log('All data inserted for student ID:', studentId);
+    return res.json({ 
+      success: true, 
+      message: 'Registration successful', 
+      studentId: studentId
+    });
 
   } catch (err) {
     if (connection) await connection.rollback();
