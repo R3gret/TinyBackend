@@ -4,6 +4,7 @@ const db = require('../db');
 const multer = require('multer');
 const path = require('path');
 const fs = require('fs');
+const crypto = require('crypto');
 
 // Configure multer for file uploads
 const storage = multer.diskStorage({
@@ -402,7 +403,199 @@ router.get('/download/:fileId', async (req, res) => {
   }
 });
 
+// Helper to normalize FormData arrays (cdc_ids[] or csv string)
+const parseIdsArray = (value) => {
+  if (!value) return [];
+  if (Array.isArray(value)) return value;
+  if (typeof value === 'string') {
+    if (value.includes(',')) {
+      return value.split(',').map(part => part.trim()).filter(Boolean);
+    }
+    return [value];
+  }
+  return [];
+};
+
 // --- Generic Routes Last ---
+
+// POST /api/files/multi-cdc-upload - Upload selected files to multiple CDCs under the same folder/category
+router.post('/multi-cdc-upload', upload.array('files', 25), async (req, res) => {
+  const { folder_name, age_group_id } = req.body;
+  const { id: userId } = req.user || {};
+  const fileUploads = req.files || [];
+
+  let rawCdcIds = req.body['cdc_ids[]'] ?? req.body.cdc_ids ?? [];
+  rawCdcIds = parseIdsArray(rawCdcIds);
+  const cdcIds = rawCdcIds
+    .map(id => parseInt(id, 10))
+    .filter(id => !Number.isNaN(id));
+
+  if (!userId) {
+    fileUploads.forEach(file => fs.existsSync(file.path) && fs.unlinkSync(file.path));
+    return res.status(401).json({
+      success: false,
+      message: 'User authentication required'
+    });
+  }
+
+  if (!folder_name || !folder_name.trim()) {
+    fileUploads.forEach(file => fs.existsSync(file.path) && fs.unlinkSync(file.path));
+    return res.status(400).json({
+      success: false,
+      message: 'Folder name is required'
+    });
+  }
+
+  if (!age_group_id) {
+    fileUploads.forEach(file => fs.existsSync(file.path) && fs.unlinkSync(file.path));
+    return res.status(400).json({
+      success: false,
+      message: 'age_group_id is required'
+    });
+  }
+
+  if (!cdcIds.length) {
+    fileUploads.forEach(file => fs.existsSync(file.path) && fs.unlinkSync(file.path));
+    return res.status(400).json({
+      success: false,
+      message: 'Select at least one CDC to upload'
+    });
+  }
+
+  if (!fileUploads.length) {
+    return res.status(400).json({
+      success: false,
+      message: 'No files uploaded'
+    });
+  }
+
+  let connection;
+  const createdFilePaths = [];
+  try {
+    connection = await db.promisePool.getConnection();
+    await connection.beginTransaction();
+
+    // Validate CDCs and ensure they exist & active
+    const validatedCdcMap = new Map();
+    for (const cdcId of cdcIds) {
+      if (validatedCdcMap.has(cdcId)) continue;
+      const [cdcRows] = await connection.query(
+        'SELECT cdc_id, status FROM cdc WHERE cdc_id = ?',
+        [cdcId]
+      );
+
+      if (!cdcRows.length) {
+        throw new Error(`CDC ${cdcId} not found`);
+      }
+
+      if (cdcRows[0].status && cdcRows[0].status !== 'active') {
+        throw new Error(`CDC ${cdcId} is not active`);
+      }
+
+      validatedCdcMap.set(cdcId, true);
+    }
+
+    // Cache category IDs per CDC to minimize queries
+    const categoryCache = new Map();
+    const folderName = folder_name.trim();
+
+    const getOrCreateCategory = async (cdcId) => {
+      if (categoryCache.has(cdcId)) {
+        return categoryCache.get(cdcId);
+      }
+
+      const [existing] = await connection.query(
+        'SELECT category_id FROM domain_file_categories WHERE category_name = ? AND age_group_id = ? AND cdc_id = ?',
+        [folderName, age_group_id, cdcId]
+      );
+
+      if (existing.length) {
+        categoryCache.set(cdcId, existing[0].category_id);
+        return existing[0].category_id;
+      }
+
+      const [insertResult] = await connection.query(
+        'INSERT INTO domain_file_categories (category_name, cdc_id, age_group_id) VALUES (?, ?, ?)',
+        [folderName, cdcId, age_group_id]
+      );
+
+      categoryCache.set(cdcId, insertResult.insertId);
+      return insertResult.insertId;
+    };
+
+    let insertedCount = 0;
+
+    for (const uploadedFile of fileUploads) {
+      const sourcePath = uploadedFile.path;
+      const sourceExt = path.extname(uploadedFile.originalname);
+      const sourceBase = path.basename(uploadedFile.filename, sourceExt);
+
+      for (const cdcId of cdcIds) {
+        const categoryId = await getOrCreateCategory(cdcId);
+        const uniqueSuffix = crypto.randomUUID();
+        const targetFileName = `${sourceBase}-cdc-${cdcId}-${uniqueSuffix}${sourceExt}`;
+        const targetPath = path.join(path.dirname(sourcePath), targetFileName);
+
+        fs.copyFileSync(sourcePath, targetPath);
+        createdFilePaths.push(targetPath);
+
+        await connection.query(
+          `INSERT INTO files 
+          (category_id, age_group_id, file_name, file_type, file_path, cdc_id, id) 
+          VALUES (?, ?, ?, ?, ?, ?, ?)`,
+          [
+            categoryId,
+            age_group_id,
+            uploadedFile.originalname,
+            uploadedFile.mimetype,
+            targetPath,
+            cdcId,
+            userId
+          ]
+        );
+        insertedCount += 1;
+      }
+    }
+
+    await connection.commit();
+
+    // Remove the original uploaded temp files since copies were created
+    fileUploads.forEach(file => {
+      if (fs.existsSync(file.path)) {
+        fs.unlinkSync(file.path);
+      }
+    });
+
+    return res.json({
+      success: true,
+      message: `Uploaded ${fileUploads.length} file(s) to ${cdcIds.length} CDC(s)`,
+      insertedRecords: insertedCount
+    });
+  } catch (err) {
+    if (connection) {
+      await connection.rollback();
+    }
+    // Cleanup copied files
+    createdFilePaths.forEach(filePath => {
+      if (fs.existsSync(filePath)) {
+        fs.unlinkSync(filePath);
+      }
+    });
+    // Cleanup originals
+    fileUploads.forEach(file => {
+      if (fs.existsSync(file.path)) {
+        fs.unlinkSync(file.path);
+      }
+    });
+    console.error('Multi CDC upload error:', err);
+    return res.status(500).json({
+      success: false,
+      message: err.message || 'Failed to upload files to selected CDCs'
+    });
+  } finally {
+    if (connection) connection.release();
+  }
+});
 
 // POST /api/files - Handles file uploads (available to all if cdc_id is null, or for user's CDC)
 router.post('/', upload.single('file_data'), async (req, res) => {
