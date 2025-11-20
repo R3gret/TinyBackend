@@ -24,18 +24,11 @@ const upload = multer({ storage });
 
 // --- Specific Routes First ---
 
-// GET /api/files/counts - Returns file counts per category for a specific age group
+// GET /api/files/counts - Returns file counts per category
 // Query param: scope - 'all' (only available to all), 'cdc' (only user's CDC), 'both' (default, both)
 router.get('/counts', async (req, res) => {
-  const { age_group_id, scope = 'both' } = req.query;
+  const { scope = 'both' } = req.query;
   const { cdc_id: userCdcId } = req.user || {};
-
-  if (!age_group_id) {
-    return res.status(400).json({
-      success: false,
-      message: 'age_group_id is required'
-    });
-  }
 
   let connection;
   try {
@@ -49,19 +42,19 @@ router.get('/counts', async (req, res) => {
       query = `
         SELECT f.category_id, COUNT(*) as count 
         FROM files f
-        WHERE f.age_group_id = ? AND f.cdc_id IS NULL
+        WHERE f.cdc_id IS NULL
         GROUP BY f.category_id
       `;
-      params = [age_group_id];
+      params = [];
     } else if (scope === 'cdc' && userCdcId) {
       // Only files for user's CDC
       query = `
         SELECT f.category_id, COUNT(*) as count 
         FROM files f
-        WHERE f.age_group_id = ? AND f.cdc_id = ?
+        WHERE f.cdc_id = ?
         GROUP BY f.category_id
       `;
-      params = [age_group_id, userCdcId];
+      params = [userCdcId];
     } else if (scope === 'cdc' && !userCdcId) {
       // User has no CDC, so no CDC-specific files
       return res.json({
@@ -74,18 +67,18 @@ router.get('/counts', async (req, res) => {
         query = `
           SELECT f.category_id, COUNT(*) as count 
           FROM files f
-          WHERE f.age_group_id = ? AND f.cdc_id IS NULL
+          WHERE f.cdc_id IS NULL
           GROUP BY f.category_id
         `;
-        params = [age_group_id];
+        params = [];
       } else {
         query = `
           SELECT f.category_id, COUNT(*) as count 
           FROM files f
-          WHERE f.age_group_id = ? AND (f.cdc_id IS NULL OR f.cdc_id = ?)
+          WHERE f.cdc_id IS NULL OR f.cdc_id = ?
           GROUP BY f.category_id
         `;
-        params = [age_group_id, userCdcId];
+        params = [userCdcId];
       }
     }
 
@@ -143,7 +136,7 @@ router.get('/get-age-groups', async (req, res) => {
 // Query param: scope - 'all' (only available to all), 'cdc' (only user's CDC), 'both' (default, both)
 router.get('/get-categories', async (req, res) => {
   const { cdc_id: userCdcId } = req.user || {};
-  const { age_group_id, scope = 'both' } = req.query;
+  const { scope = 'both' } = req.query;
   let connection;
 
   try {
@@ -177,12 +170,6 @@ router.get('/get-categories', async (req, res) => {
       }
     }
 
-    // If age_group_id is provided, add it to the filter
-    if (age_group_id) {
-      query += ' AND age_group_id = ?';
-      params.push(age_group_id);
-    }
-
     const [results] = await connection.query(query, params);
     
     return res.json({
@@ -202,11 +189,11 @@ router.get('/get-categories', async (req, res) => {
 
 // POST /api/files/categories - Create a new category (available to all if cdc_id is null, or for user's CDC)
 router.post('/categories', async (req, res) => {
-  const { category_name, age_group_id } = req.body;
+  const { category_name } = req.body;
   const { cdc_id: userCdcId } = req.user || {};
 
-  if (!category_name || !age_group_id) {
-    return res.status(400).json({ success: false, message: 'Category name and age_group_id are required' });
+  if (!category_name) {
+    return res.status(400).json({ success: false, message: 'Category name is required' });
   }
 
   let connection;
@@ -215,13 +202,13 @@ router.post('/categories', async (req, res) => {
     // If userCdcId is null, create category available to all (cdc_id = NULL)
     // If userCdcId is provided, create category for that CDC
     const [result] = await connection.query(
-      'INSERT INTO domain_file_categories (category_name, cdc_id, age_group_id) VALUES (?, ?, ?)',
-      [category_name, userCdcId || null, age_group_id]
+      'INSERT INTO domain_file_categories (category_name, cdc_id) VALUES (?, ?)',
+      [category_name, userCdcId || null]
     );
     res.status(201).json({
       success: true,
       message: 'Category created successfully',
-      category: { category_id: result.insertId, category_name, cdc_id: userCdcId || null, age_group_id }
+      category: { category_id: result.insertId, category_name, cdc_id: userCdcId || null }
     });
   } catch (err) {
     console.error('Database query error:', err);
@@ -420,7 +407,7 @@ const parseIdsArray = (value) => {
 
 // POST /api/files/multi-cdc-upload - Upload selected files to multiple CDCs under the same folder/category
 router.post('/multi-cdc-upload', upload.array('files', 25), async (req, res) => {
-  const { folder_name, age_group_id } = req.body;
+  const { folder_name } = req.body;
   const { id: userId } = req.user || {};
   const fileUploads = req.files || [];
 
@@ -443,14 +430,6 @@ router.post('/multi-cdc-upload', upload.array('files', 25), async (req, res) => 
     return res.status(400).json({
       success: false,
       message: 'Folder name is required'
-    });
-  }
-
-  if (!age_group_id) {
-    fileUploads.forEach(file => fs.existsSync(file.path) && fs.unlinkSync(file.path));
-    return res.status(400).json({
-      success: false,
-      message: 'age_group_id is required'
     });
   }
 
@@ -505,8 +484,8 @@ router.post('/multi-cdc-upload', upload.array('files', 25), async (req, res) => 
       }
 
       const [existing] = await connection.query(
-        'SELECT category_id FROM domain_file_categories WHERE category_name = ? AND age_group_id = ? AND cdc_id = ?',
-        [folderName, age_group_id, cdcId]
+        'SELECT category_id FROM domain_file_categories WHERE category_name = ? AND cdc_id = ?',
+        [folderName, cdcId]
       );
 
       if (existing.length) {
@@ -515,8 +494,8 @@ router.post('/multi-cdc-upload', upload.array('files', 25), async (req, res) => 
       }
 
       const [insertResult] = await connection.query(
-        'INSERT INTO domain_file_categories (category_name, cdc_id, age_group_id) VALUES (?, ?, ?)',
-        [folderName, cdcId, age_group_id]
+        'INSERT INTO domain_file_categories (category_name, cdc_id) VALUES (?, ?)',
+        [folderName, cdcId]
       );
 
       categoryCache.set(cdcId, insertResult.insertId);
@@ -541,11 +520,10 @@ router.post('/multi-cdc-upload', upload.array('files', 25), async (req, res) => 
 
         await connection.query(
           `INSERT INTO files 
-          (category_id, age_group_id, file_name, file_type, file_path, cdc_id, id) 
-          VALUES (?, ?, ?, ?, ?, ?, ?)`,
+          (category_id, file_name, file_type, file_path, cdc_id, id) 
+          VALUES (?, ?, ?, ?, ?, ?)`,
           [
             categoryId,
-            age_group_id,
             uploadedFile.originalname,
             uploadedFile.mimetype,
             targetPath,
@@ -599,11 +577,11 @@ router.post('/multi-cdc-upload', upload.array('files', 25), async (req, res) => 
 
 // POST /api/files - Handles file uploads (available to all if cdc_id is null, or for user's CDC)
 router.post('/', upload.single('file_data'), async (req, res) => {
-  const { category_id, age_group_id, file_name } = req.body;
+  const { category_id, file_name } = req.body;
   const file = req.file;
   const { id: userId, cdc_id: userCdcId } = req.user || {};
 
-  if (!category_id || !age_group_id || !file_name || !file) {
+  if (!category_id || !file_name || !file) {
     if (file) fs.unlinkSync(file.path); // Clean up orphaned file
     return res.status(400).json({ 
       success: false, 
@@ -627,11 +605,10 @@ router.post('/', upload.single('file_data'), async (req, res) => {
     // If userCdcId is provided, upload file for that CDC
     const [result] = await connection.query(
       `INSERT INTO files 
-      (category_id, age_group_id, file_name, file_type, file_path, cdc_id, id) 
-      VALUES (?, ?, ?, ?, ?, ?, ?)`,
+      (category_id, file_name, file_type, file_path, cdc_id, id) 
+      VALUES (?, ?, ?, ?, ?, ?)`,
       [
         category_id, 
-        age_group_id, 
         file_name, 
         file.mimetype, 
         file.path,
