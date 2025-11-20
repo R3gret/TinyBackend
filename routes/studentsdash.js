@@ -2,6 +2,7 @@ const express = require('express');
 const router = express.Router();
 const db = require('../db');
 const authMiddleware = require('./authMiddleware');
+const { getAcademicYearDateRange } = require('../utils/academicYear');
 
 router.get('/', authMiddleware, async (req, res) => {
   const { ageFilter } = req.query;
@@ -94,7 +95,7 @@ router.get('/', authMiddleware, async (req, res) => {
 
 // New route to get gender distribution
 router.get('/gender-distribution', authMiddleware, async (req, res) => {
-  const { ageFilter } = req.query;
+  const { ageFilter, academic_year } = req.query;
   const { cdc_id } = req.user;
 
   if (!cdc_id) {
@@ -106,6 +107,19 @@ router.get('/gender-distribution', authMiddleware, async (req, res) => {
   
   let query = 'SELECT gender, COUNT(*) as count FROM students WHERE cdc_id = ?';
   const params = [cdc_id];
+  
+  // Filter by academic year if provided
+  if (academic_year) {
+    const dateRange = getAcademicYearDateRange(academic_year);
+    if (!dateRange) {
+      return res.status(400).json({
+        success: false,
+        message: 'Invalid academic year format. Expected format: "YYYY-YYYY+1" (e.g., "2025-2026")'
+      });
+    }
+    query += ' AND enrolled_at >= ? AND enrolled_at <= ?';
+    params.push(dateRange.startDate, dateRange.endDate);
+  }
   
   if (ageFilter) {
     // Calculate date ranges based on age filter using native Date
@@ -170,6 +184,7 @@ router.get('/gender-distribution', authMiddleware, async (req, res) => {
 router.get('/enrollment-stats', authMiddleware, async (req, res) => {
   let connection;
   try {
+    const { academic_year } = req.query;
     const { cdc_id } = req.user;
 
     if (!cdc_id) {
@@ -179,6 +194,18 @@ router.get('/enrollment-stats', authMiddleware, async (req, res) => {
       });
     }
     connection = await db.promisePool.getConnection();
+    
+    // Get academic year date range if provided
+    let academicYearDateRange = null;
+    if (academic_year) {
+      academicYearDateRange = getAcademicYearDateRange(academic_year);
+      if (!academicYearDateRange) {
+        return res.status(400).json({
+          success: false,
+          message: 'Invalid academic year format. Expected format: "YYYY-YYYY+1" (e.g., "2025-2026")'
+        });
+      }
+    }
     
     // Get current month stats
     const currentMonth = new Date().getMonth() + 1;
@@ -193,24 +220,36 @@ router.get('/enrollment-stats', authMiddleware, async (req, res) => {
     }
     
     // Query for current month enrollments
-    const currentMonthQuery = `SELECT COUNT(*) as count 
+    let currentMonthQuery = `SELECT COUNT(*) as count 
        FROM students 
        WHERE MONTH(enrolled_at) = ? AND YEAR(enrolled_at) = ? AND cdc_id = ?`;
     const currentMonthParams = [currentMonth, currentYear, cdc_id];
+    if (academicYearDateRange) {
+      currentMonthQuery += ' AND enrolled_at >= ? AND enrolled_at <= ?';
+      currentMonthParams.push(academicYearDateRange.startDate, academicYearDateRange.endDate);
+    }
     console.log('Executing query:', currentMonthQuery, 'with params:', currentMonthParams);
     const [currentMonthResults] = await connection.query(currentMonthQuery, currentMonthParams);
     
     // Query for last month enrollments
-    const lastMonthQuery = `SELECT COUNT(*) as count 
+    let lastMonthQuery = `SELECT COUNT(*) as count 
        FROM students 
        WHERE MONTH(enrolled_at) = ? AND YEAR(enrolled_at) = ? AND cdc_id = ?`;
     const lastMonthParams = [lastMonth, lastYear, cdc_id];
+    if (academicYearDateRange) {
+      lastMonthQuery += ' AND enrolled_at >= ? AND enrolled_at <= ?';
+      lastMonthParams.push(academicYearDateRange.startDate, academicYearDateRange.endDate);
+    }
     console.log('Executing query:', lastMonthQuery, 'with params:', lastMonthParams);
     const [lastMonthResults] = await connection.query(lastMonthQuery, lastMonthParams);
     
-    // Query for total students (all months)
-    const totalQuery = `SELECT COUNT(*) as total FROM students WHERE cdc_id = ?`;
+    // Query for total students (filtered by academic year if provided)
+    let totalQuery = `SELECT COUNT(*) as total FROM students WHERE cdc_id = ?`;
     const totalParams = [cdc_id];
+    if (academicYearDateRange) {
+      totalQuery += ' AND enrolled_at >= ? AND enrolled_at <= ?';
+      totalParams.push(academicYearDateRange.startDate, academicYearDateRange.endDate);
+    }
     console.log('Executing query:', totalQuery, 'with params:', totalParams);
     const [totalResults] = await connection.query(totalQuery, totalParams);
     
@@ -239,6 +278,7 @@ router.get('/enrollment-stats', authMiddleware, async (req, res) => {
 router.get('/age-distribution', authMiddleware, async (req, res) => {
     let connection;
     try {
+      const { academic_year } = req.query;
       const { cdc_id } = req.user;
 
       if (!cdc_id) {
@@ -248,6 +288,18 @@ router.get('/age-distribution', authMiddleware, async (req, res) => {
         });
       }
       connection = await db.promisePool.getConnection();
+      
+      // Get academic year date range if provided
+      let academicYearDateRange = null;
+      if (academic_year) {
+        academicYearDateRange = getAcademicYearDateRange(academic_year);
+        if (!academicYearDateRange) {
+          return res.status(400).json({
+            success: false,
+            message: 'Invalid academic year format. Expected format: "YYYY-YYYY+1" (e.g., "2025-2026")'
+          });
+        }
+      }
       
       // Get current date for age calculations
       const today = new Date();
@@ -279,10 +331,17 @@ router.get('/age-distribution', authMiddleware, async (req, res) => {
       const distribution = {};
       
       for (const [group, dates] of Object.entries(ageGroups)) {
-        const query = `SELECT COUNT(*) as count 
+        let query = `SELECT COUNT(*) as count 
            FROM students 
            WHERE birthdate BETWEEN ? AND ? AND cdc_id = ?`;
         const params = [dates.minDate.toISOString().split('T')[0], dates.maxDate.toISOString().split('T')[0], cdc_id];
+        
+        // Add academic year filter if provided
+        if (academicYearDateRange) {
+          query += ' AND enrolled_at >= ? AND enrolled_at <= ?';
+          params.push(academicYearDateRange.startDate, academicYearDateRange.endDate);
+        }
+        
         console.log('Executing query for group', group, ':', query, 'with params:', params);
         const [results] = await connection.query(query, params);
         

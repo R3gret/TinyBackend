@@ -1,6 +1,7 @@
 const express = require('express');
 const router = express.Router();
 const db = require('../db');
+const { getAcademicYearDateRange } = require('../utils/academicYear');
 
 // Helper function to group domains
 function groupDomains(domains, evaluations) {
@@ -486,10 +487,23 @@ router.get('/evaluations/single/:evaluation_id', async (req, res) => {
 router.get('/progress-summary', async (req, res) => {
   let connection;
   try {
+    const { academic_year } = req.query;
     connection = await db.promisePool.getConnection();
     
+    // Get academic year date range if provided
+    let academicYearDateRange = null;
+    if (academic_year) {
+      academicYearDateRange = getAcademicYearDateRange(academic_year);
+      if (!academicYearDateRange) {
+        return res.status(400).json({
+          success: false,
+          message: 'Invalid academic year format. Expected format: "YYYY-YYYY+1" (e.g., "2025-2026")'
+        });
+      }
+    }
+    
     // Query to get evaluation counts per domain category
-    const [results] = await connection.query(`
+    let query = `
       SELECT 
         d.domain_category,
         COUNT(CASE WHEN ei.evaluation_value = 'yes' THEN 1 END) as yes_count,
@@ -497,8 +511,19 @@ router.get('/progress-summary', async (req, res) => {
       FROM evaluation_items ei
       JOIN domains d ON ei.domain_id = d.domain_id
       JOIN evaluations e ON ei.evaluation_id = e.evaluation_id
-      GROUP BY d.domain_category
-    `);
+      JOIN students s ON e.student_id = s.student_id
+    `;
+    const params = [];
+    
+    // Add academic year filter if provided
+    if (academicYearDateRange) {
+      query += ' WHERE s.enrolled_at >= ? AND s.enrolled_at <= ?';
+      params.push(academicYearDateRange.startDate, academicYearDateRange.endDate);
+    }
+    
+    query += ' GROUP BY d.domain_category';
+    
+    const [results] = await connection.query(query, params);
 
     // Process results to calculate percentages and normalize category names
     const progressSummary = results.map(row => {

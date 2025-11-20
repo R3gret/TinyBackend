@@ -239,6 +239,8 @@ router.get('/weekly', async (req, res) => {
   try {
     connection = await db.promisePool.getConnection();
 
+    const { academic_year } = req.query;
+
     // Get the current date at midnight for accurate comparison
     const today = new Date();
     today.setHours(0, 0, 0, 0);
@@ -250,14 +252,28 @@ router.get('/weekly', async (req, res) => {
     const endDate = new Date(today);
     endDate.setDate(today.getDate() + 3);
 
-    // Query to get distinct student count first
-    const [studentCount] = await connection.query(
-      'SELECT COUNT(DISTINCT student_id) as total FROM students'
-    );
+    // Query to get distinct student count - filter by academic year if provided
+    let studentCountQuery = 'SELECT COUNT(DISTINCT s.student_id) as total FROM students s';
+    const studentCountParams = [];
+    
+    if (academic_year) {
+      const { getAcademicYearDateRange } = require('../utils/academicYear');
+      const dateRange = getAcademicYearDateRange(academic_year);
+      if (!dateRange) {
+        return res.status(400).json({
+          success: false,
+          message: 'Invalid academic year format. Expected format: "YYYY-YYYY+1" (e.g., "2025-2026")'
+        });
+      }
+      studentCountQuery += ' WHERE s.enrolled_at >= ? AND s.enrolled_at <= ?';
+      studentCountParams.push(dateRange.startDate, dateRange.endDate);
+    }
+    
+    const [studentCount] = await connection.query(studentCountQuery, studentCountParams);
     const totalStudents = studentCount[0].total || 0;
 
-    // Query attendance data for this date range
-    const [results] = await connection.query(`
+    // Query attendance data for this date range - filter by academic year if provided
+    let attendanceQuery = `
       SELECT 
         DATE(a.attendance_date) AS date,
         COUNT(DISTINCT a.student_id) AS total_attendance,
@@ -266,10 +282,23 @@ router.get('/weekly', async (req, res) => {
         SUM(CASE WHEN a.status = 'Absent' THEN 1 ELSE 0 END) AS absent_count,
         SUM(CASE WHEN a.status = 'Excused' THEN 1 ELSE 0 END) AS excused_count
       FROM attendance a
+      JOIN students s ON a.student_id = s.student_id
       WHERE DATE(a.attendance_date) BETWEEN ? AND ?
-      GROUP BY DATE(a.attendance_date)
-      ORDER BY date ASC
-    `, [startDate, endDate]);
+    `;
+    const attendanceParams = [startDate, endDate];
+    
+    if (academic_year) {
+      const { getAcademicYearDateRange } = require('../utils/academicYear');
+      const dateRange = getAcademicYearDateRange(academic_year);
+      if (dateRange) {
+        attendanceQuery += ' AND s.enrolled_at >= ? AND s.enrolled_at <= ?';
+        attendanceParams.push(dateRange.startDate, dateRange.endDate);
+      }
+    }
+    
+    attendanceQuery += ' GROUP BY DATE(a.attendance_date) ORDER BY date ASC';
+    
+    const [results] = await connection.query(attendanceQuery, attendanceParams);
 
     // Generate all 7 days with proper data
     const finalResults = [];
