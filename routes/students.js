@@ -380,42 +380,6 @@ function generatePDF(res, data) {
 
   yPos += lineHeight * 1.5;
 
-  // Table headers - match Excel column structure
-  const colWidths = [
-    25 * scale,  // No.
-    100 * scale, // NAME OF CHILD (merged)
-    30 * scale,  // SEX
-    50 * scale,  // 4ps ID
-    35 * scale,  // DISABILITY
-    60 * scale,  // BIRTHDATE
-    35 * scale,  // AGE
-    35 * scale,  // HEIGHT
-    35 * scale,  // WEIGHT
-    60 * scale,  // BIRTHPLACE
-    80 * scale,  // ADDRESS
-    90 * scale,  // GUARDIAN (merged)
-    50 * scale   // CONTACT
-  ];
-  let xPos = margin;
-
-  const headers = ['No.', 'NAME OF CHILD', 'SEX', '4ps ID', 'DISABILITY', 'BIRTHDATE', 'AGE', 'HEIGHT', 'WEIGHT', 'BIRTHPLACE', 'ADDRESS', 'GUARDIAN', 'CONTACT'];
-  doc.fontSize(smallFontSize)
-     .font('Helvetica-Bold')
-     .fillColor('black');
-
-  // Draw header row with borders
-  const headerY = yPos;
-  headers.forEach((header, i) => {
-    // Draw cell border
-    doc.rect(xPos, headerY, colWidths[i], lineHeight * 1.2)
-       .stroke();
-    // Add text
-    doc.text(header, xPos + 2, headerY + 3, { width: colWidths[i] - 4, align: 'center' });
-    xPos += colWidths[i];
-  });
-
-  yPos += lineHeight * 1.2;
-
   // Calculate pagination - 25 students per page
   const studentsPerPage = 25;
   const totalPages = Math.ceil(students.length / studentsPerPage);
@@ -489,25 +453,51 @@ function generatePDF(res, data) {
 
     yPos += lineHeight * 1.5;
 
-    // Table headers - match Excel column structure
-    const colWidths = [
-      25 * scale,  // No.
-      100 * scale, // NAME OF CHILD (merged)
-      30 * scale,  // SEX
-      50 * scale,  // 4ps ID
-      35 * scale,  // DISABILITY
-      60 * scale,  // BIRTHDATE
-      35 * scale,  // AGE
-      35 * scale,  // HEIGHT
-      35 * scale,  // WEIGHT
-      60 * scale,  // BIRTHPLACE
-      80 * scale,  // ADDRESS
-      90 * scale,  // GUARDIAN (merged)
-      50 * scale   // CONTACT
-    ];
-    xPos = margin;
-
+    // Table headers - calculate auto-fit widths based on content
     const headers = ['No.', 'NAME OF CHILD', 'SEX', '4ps ID', 'DISABILITY', 'BIRTHDATE', 'AGE', 'HEIGHT', 'WEIGHT', 'BIRTHPLACE', 'ADDRESS', 'GUARDIAN', 'CONTACT'];
+    
+    // Calculate column widths based on header text and sample data
+    const calculateColWidth = (headerText, sampleData = []) => {
+      const headerWidth = doc.widthOfString(headerText, { fontSize: smallFontSize });
+      const dataWidths = sampleData.map(data => {
+        const text = data ? String(data) : '';
+        return doc.widthOfString(text, { fontSize: smallFontSize * 0.85 });
+      });
+      const maxDataWidth = dataWidths.length > 0 ? Math.max(...dataWidths) : 0;
+      return Math.max(headerWidth, maxDataWidth) + 8; // Add padding
+    };
+
+    // Get sample data from current page students for width calculation
+    const colWidths = headers.map((header, idx) => {
+      const sampleData = pageStudents.map(s => {
+        const middleInitial = s.middle_name ? `${s.middle_name.charAt(0).toUpperCase()}.` : '';
+        const fullName = `${s.last_name || ''}, ${s.first_name || ''} ${middleInitial}`.trim();
+        const ageInMonths = calculateAgeInMonths(s.birthdate);
+        const rowData = [
+          (startIdx + 1).toString(),
+          fullName,
+          s.gender || '',
+          s.four_ps_id || '',
+          normalizeYesNo(s.disability, ''),
+          formatDateForCsv(s.birthdate),
+          ageInMonths === '' ? '' : ageInMonths.toString(),
+          s.height_cm ? s.height_cm.toString() : '',
+          s.weight_kg ? s.weight_kg.toString() : '',
+          s.birthplace || '',
+          s.child_address || '',
+          s.guardian_name || '',
+          s.phone_num || ''
+        ];
+        return rowData[idx];
+      });
+      return calculateColWidth(header, sampleData);
+    });
+
+    // Calculate total table width and center it
+    const totalTableWidth = colWidths.reduce((sum, width) => sum + width, 0);
+    const tableStartX = (pageWidth - totalTableWidth) / 2;
+    xPos = tableStartX;
+
     doc.fontSize(smallFontSize)
        .font('Helvetica-Bold')
        .fillColor('black');
@@ -527,16 +517,16 @@ function generatePDF(res, data) {
     const tableStartY = headerY;
     const tableEndY = yPos + (pageStudents.length * lineHeight * 0.9);
     
-    // Draw vertical lines for all columns
-    xPos = margin;
+    // Draw vertical lines for all columns - centered
+    xPos = tableStartX;
     doc.moveTo(xPos, tableStartY).lineTo(xPos, tableEndY).stroke();
     headers.forEach((_, i) => {
       xPos += colWidths[i];
       doc.moveTo(xPos, tableStartY).lineTo(xPos, tableEndY).stroke();
     });
     
-    // Draw bottom border
-    doc.moveTo(margin, tableEndY).lineTo(pageWidth - margin, tableEndY).stroke();
+    // Draw bottom border - centered
+    doc.moveTo(tableStartX, tableEndY).lineTo(tableStartX + totalTableWidth, tableEndY).stroke();
 
     // Student data with cell borders
     doc.font('Helvetica')
@@ -544,7 +534,7 @@ function generatePDF(res, data) {
     
     for (let i = 0; i < pageStudents.length; i++) {
       const student = pageStudents[i];
-      xPos = margin;
+      xPos = tableStartX; // Use centered starting position
       const globalIndex = startIdx + i;
 
       const middleInitial = student.middle_name ? `${student.middle_name.charAt(0).toUpperCase()}.` : '';
@@ -894,17 +884,25 @@ router.get('/export', authenticate, async (req, res) => {
         }
       }
 
-      // Auto-fit columns
+      // Auto-fit columns - calculate widths based on content for better fit
       ws.columns.forEach((column, index) => {
         let maxLength = 0;
         column.eachCell({ includeEmpty: true }, (cell) => {
           const cellValue = cell.value ? cell.value.toString() : '';
+          // For merged cells, count the full text length
           const cellLength = cellValue.length;
           if (cellLength > maxLength) {
             maxLength = cellLength;
           }
         });
-        column.width = Math.min(Math.max(maxLength + 2, 10), 50);
+        // Auto-fit with minimum width of 10 and maximum of 60 for better readability
+        // Adjust based on column index for better spacing
+        const baseWidth = Math.min(Math.max(maxLength + 2, 10), 60);
+        // Slightly adjust widths for better visual balance
+        if (index === 0) column.width = Math.max(baseWidth, 8); // No. column
+        else if (index === 1 || index === 2) column.width = Math.max(baseWidth, 25); // NAME OF CHILD (merged)
+        else if (index === 11 || index === 12) column.width = Math.max(baseWidth, 20); // GUARDIAN (merged)
+        else column.width = baseWidth;
       });
 
       // Set row heights
