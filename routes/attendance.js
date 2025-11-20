@@ -3,6 +3,8 @@ const router = express.Router();
 const db = require('../db');
 const { body, validationResult } = require('express-validator');
 const authMiddleware = require('./authMiddleware');
+const PDFDocument = require('pdfkit');
+const { getAcademicYearDateRange } = require('../utils/academicYear');
 
 // Insert attendance record with status
 // Protect all attendance routes with auth
@@ -400,4 +402,288 @@ router.get('/today', async (req, res) => {
     if (connection) connection.release();
   }
 });
+
+// Export attendance table as PDF
+router.get('/export/pdf', authMiddleware, async (req, res) => {
+  let connection;
+  try {
+    const cdcId = req.user?.cdc_id;
+    if (!cdcId) {
+      return res.status(403).json({
+        success: false,
+        message: 'Access denied. User is not associated with a CDC.'
+      });
+    }
+
+    const { start_date, num_weeks = 1, academic_year } = req.query;
+
+    if (!start_date) {
+      return res.status(400).json({
+        success: false,
+        message: 'start_date query parameter is required (format: YYYY-MM-DD)'
+      });
+    }
+
+    const numWeeks = parseInt(num_weeks, 10) || 1;
+    if (numWeeks < 1 || numWeeks > 12) {
+      return res.status(400).json({
+        success: false,
+        message: 'num_weeks must be between 1 and 12'
+      });
+    }
+
+    connection = await db.promisePool.getConnection();
+
+    // Validate academic year if provided
+    let academicYearDateRange = null;
+    if (academic_year) {
+      academicYearDateRange = getAcademicYearDateRange(academic_year);
+      if (!academicYearDateRange) {
+        return res.status(400).json({
+          success: false,
+          message: 'Invalid academic year format. Expected format: "YYYY-YYYY+1" (e.g., "2025-2026")'
+        });
+      }
+    }
+
+    // Parse start date and calculate date range
+    const startDate = new Date(start_date);
+    if (isNaN(startDate.getTime())) {
+      return res.status(400).json({
+        success: false,
+        message: 'Invalid start_date format. Expected format: YYYY-MM-DD'
+      });
+    }
+
+    // Calculate end date (num_weeks * 7 days)
+    const endDate = new Date(startDate);
+    endDate.setDate(startDate.getDate() + (numWeeks * 7) - 1);
+
+    // Get all students for this CDC
+    let studentsQuery = `
+      SELECT 
+        s.student_id,
+        s.first_name,
+        s.middle_name,
+        s.last_name
+      FROM students s
+      WHERE s.cdc_id = ?
+    `;
+    const studentsParams = [cdcId];
+
+    if (academicYearDateRange) {
+      studentsQuery += ' AND s.enrolled_at >= ? AND s.enrolled_at <= ?';
+      studentsParams.push(academicYearDateRange.startDate, academicYearDateRange.endDate);
+    }
+
+    studentsQuery += ' ORDER BY s.last_name, s.first_name';
+
+    const [students] = await connection.query(studentsQuery, studentsParams);
+
+    // Get all attendance records for the date range
+    let attendanceQuery = `
+      SELECT 
+        a.student_id,
+        DATE(a.attendance_date) AS date,
+        a.status
+      FROM attendance a
+      JOIN students s ON a.student_id = s.student_id
+      WHERE s.cdc_id = ?
+        AND DATE(a.attendance_date) >= ?
+        AND DATE(a.attendance_date) <= ?
+    `;
+    const attendanceParams = [cdcId, startDate.toISOString().split('T')[0], endDate.toISOString().split('T')[0]];
+
+    if (academicYearDateRange) {
+      attendanceQuery += ' AND s.enrolled_at >= ? AND s.enrolled_at <= ?';
+      attendanceParams.push(academicYearDateRange.startDate, academicYearDateRange.endDate);
+    }
+
+    const [attendanceRecords] = await connection.query(attendanceQuery, attendanceParams);
+
+    // Create a map of attendance: { student_id: { date: status } }
+    const attendanceMap = {};
+    attendanceRecords.forEach(record => {
+      if (!attendanceMap[record.student_id]) {
+        attendanceMap[record.student_id] = {};
+      }
+      attendanceMap[record.student_id][record.date] = record.status;
+    });
+
+    // Generate all dates in the range
+    const allDates = [];
+    for (let i = 0; i < numWeeks * 7; i++) {
+      const currentDate = new Date(startDate);
+      currentDate.setDate(startDate.getDate() + i);
+      if (currentDate <= endDate) {
+        allDates.push(currentDate.toISOString().split('T')[0]);
+      }
+    }
+
+    // Generate PDF
+    return generateAttendancePDF(res, {
+      students,
+      allDates,
+      attendanceMap,
+      startDate: startDate.toISOString().split('T')[0],
+      endDate: endDate.toISOString().split('T')[0],
+      numWeeks
+    });
+
+  } catch (err) {
+    console.error('Attendance PDF export error:', err);
+    return res.status(500).json({
+      success: false,
+      message: 'Failed to export attendance PDF.'
+    });
+  } finally {
+    if (connection) connection.release();
+  }
+});
+
+// Helper function to generate attendance PDF
+function generateAttendancePDF(res, data) {
+  const { students, allDates, attendanceMap, startDate, endDate, numWeeks } = data;
+
+  // Landscape: 11 x 8.5 inches (792 x 612 points)
+  const doc = new PDFDocument({ 
+    size: [792, 612], // Landscape
+    margins: { top: 30, bottom: 30, left: 20, right: 20 }
+  });
+
+  const timestamp = new Date().toISOString().split('T')[0];
+  res.setHeader('Content-Type', 'application/pdf');
+  res.setHeader(
+    'Content-Disposition',
+    `attachment; filename="attendance-${startDate}-to-${endDate}.pdf"`
+  );
+  doc.pipe(res);
+
+  const pageWidth = 792;
+  const pageHeight = 612;
+  const margin = 20;
+  const topMargin = 30;
+  const bottomMargin = 30;
+  const usableWidth = pageWidth - (margin * 2);
+  const usableHeight = pageHeight - topMargin - bottomMargin;
+
+  const studentsPerPage = 20;
+  const totalStudentPages = Math.ceil(students.length / studentsPerPage);
+
+  // Calculate column widths - fit all dates on one page
+  const studentNameWidth = 140;
+  const availableWidthForDates = usableWidth - studentNameWidth;
+  const dateColumnWidth = Math.min(availableWidthForDates / allDates.length, 25); // Max 25 points per column
+  const fontSize = 7;
+  const rowHeight = 14;
+
+  // Generate pages - one page per 20 students, all dates shown
+  for (let studentPage = 0; studentPage < totalStudentPages; studentPage++) {
+    if (studentPage > 0) {
+      doc.addPage();
+    }
+
+    const startIdx = studentPage * studentsPerPage;
+    const endIdx = Math.min(startIdx + studentsPerPage, students.length);
+    const pageStudents = students.slice(startIdx, endIdx);
+
+    let yPos = topMargin;
+
+    // Title
+    doc.fontSize(14)
+       .font('Helvetica-Bold')
+       .text('ATTENDANCE RECORD', pageWidth / 2, yPos, { align: 'center' });
+    yPos += 18;
+
+    // Date range
+    doc.fontSize(9)
+       .font('Helvetica')
+       .text(`Period: ${startDate} to ${endDate} (${numWeeks} week${numWeeks > 1 ? 's' : ''})`, pageWidth / 2, yPos, { align: 'center' });
+    yPos += 12;
+
+    // Page info
+    doc.fontSize(7)
+       .text(`Page ${studentPage + 1} of ${totalStudentPages}`, pageWidth - margin - 50, yPos, { align: 'right' });
+    yPos += 8;
+
+    // Table header
+    let xPos = margin;
+
+    // Student Name header
+    doc.fontSize(fontSize)
+       .font('Helvetica-Bold')
+       .rect(xPos, yPos, studentNameWidth, rowHeight)
+       .stroke()
+       .text('Student Name', xPos + 2, yPos + 3, { width: studentNameWidth - 4 });
+    xPos += studentNameWidth;
+
+    // Date headers - show all dates
+    allDates.forEach(date => {
+      const dateObj = new Date(date);
+      const dayOfWeek = dateObj.toLocaleDateString('en-US', { weekday: 'short' }).substring(0, 3);
+      const day = dateObj.getDate();
+      const month = dateObj.toLocaleDateString('en-US', { month: 'short' }).substring(0, 3);
+      const dateStr = `${dayOfWeek}\n${month} ${day}`;
+      
+      doc.rect(xPos, yPos, dateColumnWidth, rowHeight)
+         .stroke();
+      
+      // Split date into two lines
+      doc.fontSize(fontSize - 1)
+         .text(dayOfWeek, xPos + 1, yPos + 2, { width: dateColumnWidth - 2, align: 'center' });
+      doc.text(`${month} ${day}`, xPos + 1, yPos + 8, { width: dateColumnWidth - 2, align: 'center' });
+      
+      xPos += dateColumnWidth;
+    });
+
+    yPos += rowHeight;
+
+    // Student rows
+    pageStudents.forEach((student) => {
+      xPos = margin;
+      const studentName = `${student.last_name || ''}, ${student.first_name || ''} ${student.middle_name ? student.middle_name.charAt(0) + '.' : ''}`.trim();
+
+      // Student name cell
+      doc.font('Helvetica')
+         .fontSize(fontSize - 1)
+         .rect(xPos, yPos, studentNameWidth, rowHeight)
+         .stroke()
+         .text(studentName, xPos + 2, yPos + 3, { 
+           width: studentNameWidth - 4,
+           ellipsis: true
+         });
+      xPos += studentNameWidth;
+
+      // Attendance cells for all dates
+      allDates.forEach(date => {
+        const status = attendanceMap[student.student_id]?.[date] || '-';
+        let statusSymbol = '-';
+        if (status === 'Present') statusSymbol = 'P';
+        else if (status === 'Late') statusSymbol = 'L';
+        else if (status === 'Absent') statusSymbol = 'A';
+        else if (status === 'Excused') statusSymbol = 'E';
+
+        doc.rect(xPos, yPos, dateColumnWidth, rowHeight)
+           .stroke()
+           .text(statusSymbol, xPos + 1, yPos + 4, { 
+             width: dateColumnWidth - 2, 
+             align: 'center' 
+           });
+        xPos += dateColumnWidth;
+      });
+
+      yPos += rowHeight;
+    });
+
+    // Legend at bottom of each page
+    const legendY = pageHeight - bottomMargin - 25;
+    doc.fontSize(6)
+       .font('Helvetica')
+       .text('Legend: P = Present, L = Late, A = Absent, E = Excused, - = No Record', 
+             margin, legendY, { width: usableWidth });
+  }
+
+  doc.end();
+}
+
 module.exports = router;

@@ -8,6 +8,7 @@ const { Parser } = require('json2csv');
 const { Readable } = require('stream');
 const moment = require('moment');
 const ExcelJS = require('exceljs');
+const PDFDocument = require('pdfkit');
 const fs = require('fs');
 const path = require('path');
 const { getAcademicYearDateRange } = require('../utils/academicYear');
@@ -248,9 +249,245 @@ router.get('/', authenticate, async (req, res) => {
   }
 });
 
+// Helper function to generate PDF
+function generatePDF(res, data) {
+  const {
+    students,
+    cdcName,
+    cdwDisplayName,
+    barangay,
+    province,
+    municipality,
+    loggedInEmail,
+    loggedInPhone,
+    loggedInName,
+    focalName,
+    mswName,
+    maleCount,
+    femaleCount,
+    totalCount,
+    timestamp
+  } = data;
+
+  // Landscape: 11 x 8.5 inches (792 x 612 points)
+  const doc = new PDFDocument({ 
+    size: [792, 612], // Landscape: width x height in points
+    margins: { top: 20, bottom: 20, left: 20, right: 20 }
+  });
+
+  res.setHeader('Content-Type', 'application/pdf');
+  res.setHeader(
+    'Content-Disposition',
+    `attachment; filename="cdc-students-${timestamp}.pdf"`
+  );
+  doc.pipe(res);
+
+  const pageWidth = 792;
+  const pageHeight = 612;
+  const margin = 20;
+  const usableWidth = pageWidth - (margin * 2);
+  const usableHeight = pageHeight - (margin * 2);
+  
+  // Scale factor to fit content on one page
+  const scaleX = usableWidth / 750; // Approximate Excel width
+  const scaleY = usableHeight / 580; // Approximate Excel height
+  const scale = Math.min(scaleX, scaleY);
+
+  let yPos = margin;
+  const lineHeight = 12 * scale;
+  const fontSize = 10 * scale;
+  const smallFontSize = 8 * scale;
+
+  // Helper to format date
+  const formatDateForCsv = (dateStr) => {
+    if (!dateStr) return '';
+    const date = new Date(dateStr);
+    const month = String(date.getMonth() + 1).padStart(2, '0');
+    const day = String(date.getDate()).padStart(2, '0');
+    const year = date.getFullYear();
+    return `${month}-${day}-${year}`;
+  };
+
+  // Helper to calculate age in months
+  const calculateAgeInMonths = (birthdate) => {
+    if (!birthdate) return '';
+    const birth = new Date(birthdate);
+    const today = new Date();
+    const months = (today.getFullYear() - birth.getFullYear()) * 12 + (today.getMonth() - birth.getMonth());
+    return months >= 0 ? months : '';
+  };
+
+  // Helper to normalize yes/no
+  const normalizeYesNo = (value, defaultValue = '') => {
+    if (!value) return defaultValue;
+    const upper = String(value).toUpperCase();
+    return upper === 'Y' || upper === 'YES' ? 'Y' : upper === 'N' || upper === 'NO' ? 'N' : defaultValue;
+  };
+
+  // Images
+  const image1Path = path.join(__dirname, '..', 'image.png');
+  const image2Path = path.join(__dirname, '..', 'image1.png');
+  const imageHeight = 40 * scale;
+  const imageY = yPos + 10;
+
+  if (fs.existsSync(image1Path)) {
+    doc.image(image1Path, margin + 50, imageY, { width: 60 * scale, height: imageHeight });
+  }
+  if (fs.existsSync(image2Path)) {
+    doc.image(image2Path, margin + 200, imageY, { width: 90 * scale, height: imageHeight * 1.5 });
+  }
+
+  // Header text (centered)
+  yPos += 15 * scale;
+  doc.fontSize(fontSize)
+     .text('Republic of the Philippines', pageWidth / 2, yPos, { align: 'center' });
+  yPos += lineHeight;
+  doc.text(`Province of ${province}`, pageWidth / 2, yPos, { align: 'center' });
+  yPos += lineHeight;
+  doc.font('Helvetica-Bold')
+     .text(`Municipality of ${municipality}`, pageWidth / 2, yPos, { align: 'center' });
+  yPos += lineHeight;
+  doc.font('Helvetica')
+     .fillColor('blue')
+     .text(`Email Address: ${loggedInEmail}`, pageWidth / 2, yPos, { align: 'center' });
+  yPos += lineHeight;
+  doc.fillColor('black')
+     .text(`Telephone number: ${loggedInPhone}`, pageWidth / 2, yPos, { align: 'center' });
+
+  yPos += lineHeight * 2;
+
+  // CDC info and counts
+  doc.fontSize(smallFontSize)
+     .text(`Name of CDC: ${cdcName}`, margin, yPos)
+     .text(`Male - ${maleCount}`, pageWidth - margin - 100, yPos, { align: 'right' });
+  yPos += lineHeight;
+  doc.text(`Name of CDW: ${cdwDisplayName}`, margin, yPos)
+     .text(`Female - ${femaleCount}`, pageWidth - margin - 100, yPos, { align: 'right' });
+  yPos += lineHeight;
+  doc.text(`Barangay: ${barangay}`, margin, yPos)
+     .font('Helvetica-Bold')
+     .text(`TOTAL - ${totalCount}`, pageWidth - margin - 100, yPos, { align: 'right' });
+
+  yPos += lineHeight * 2;
+
+  // Title
+  doc.font('Helvetica-Bold')
+     .fontSize(16 * scale)
+     .text('MASTERLIST OF DAYCARE CHILDREN', pageWidth / 2, yPos, { align: 'center' });
+
+  yPos += lineHeight * 2;
+
+  // Table headers
+  const colWidths = [
+    20 * scale,  // No.
+    80 * scale,  // Name
+    25 * scale,  // Sex
+    50 * scale,  // 4ps ID
+    30 * scale,  // Disability
+    50 * scale,  // Birthdate
+    40 * scale,  // Age
+    30 * scale,  // Height
+    30 * scale,  // Weight
+    50 * scale,  // Birthplace
+    60 * scale,  // Address
+    70 * scale,  // Guardian
+    40 * scale   // Contact
+  ];
+  let xPos = margin;
+
+  const headers = ['No.', 'NAME OF CHILD', 'SEX', '4ps ID', 'DISABILITY', 'BIRTHDATE', 'AGE', 'HEIGHT', 'WEIGHT', 'BIRTHPLACE', 'ADDRESS', 'GUARDIAN', 'CONTACT'];
+  doc.fontSize(smallFontSize)
+     .font('Helvetica-Bold')
+     .fillColor('black');
+
+  headers.forEach((header, i) => {
+    doc.text(header, xPos, yPos, { width: colWidths[i], align: 'center' });
+    xPos += colWidths[i];
+  });
+
+  yPos += lineHeight * 1.5;
+
+  // Draw table borders
+  const tableStartY = yPos - lineHeight * 1.5;
+  const tableEndY = yPos + (Math.min(students.length, 25) * lineHeight * 0.8);
+  
+  // Horizontal lines
+  doc.moveTo(margin, tableStartY).lineTo(pageWidth - margin, tableStartY).stroke();
+  doc.moveTo(margin, yPos).lineTo(pageWidth - margin, yPos).stroke();
+  doc.moveTo(margin, tableEndY).lineTo(pageWidth - margin, tableEndY).stroke();
+
+  // Vertical lines
+  xPos = margin;
+  doc.moveTo(xPos, tableStartY).lineTo(xPos, tableEndY).stroke();
+  headers.forEach((_, i) => {
+    xPos += colWidths[i];
+    doc.moveTo(xPos, tableStartY).lineTo(xPos, tableEndY).stroke();
+  });
+
+  // Student data
+  doc.font('Helvetica')
+     .fontSize(smallFontSize * 0.9);
+  
+  for (let i = 0; i < Math.min(students.length, 25); i++) {
+    const student = students[i];
+    xPos = margin;
+    yPos += lineHeight * 0.8;
+
+    const middleInitial = student.middle_name ? `${student.middle_name.charAt(0).toUpperCase()}.` : '';
+    const fullName = `${student.last_name || ''}, ${student.first_name || ''} ${middleInitial}`.trim();
+    const ageInMonths = calculateAgeInMonths(student.birthdate);
+
+    const rowData = [
+      (i + 1).toString(),
+      fullName,
+      student.gender || '',
+      student.four_ps_id || '',
+      normalizeYesNo(student.disability, ''),
+      formatDateForCsv(student.birthdate),
+      ageInMonths === '' ? '' : ageInMonths.toString(),
+      student.height_cm ? student.height_cm.toString() : '',
+      student.weight_kg ? student.weight_kg.toString() : '',
+      student.birthplace || '',
+      student.child_address || '',
+      student.guardian_name || '',
+      student.phone_num || ''
+    ];
+
+    rowData.forEach((text, colIdx) => {
+      doc.text(text || '', xPos + 2, yPos, { 
+        width: colWidths[colIdx] - 4, 
+        align: colIdx === 0 ? 'center' : 'left',
+        ellipsis: true
+      });
+      xPos += colWidths[colIdx];
+    });
+  }
+
+  // Footer
+  yPos = tableEndY + lineHeight * 2;
+  doc.fontSize(smallFontSize)
+     .font('Helvetica')
+     .text('Prepared by:', margin + 50, yPos)
+     .text('Validated by:', margin + 200, yPos)
+     .text('Approved by:', margin + 350, yPos);
+
+  yPos += lineHeight * 1.5;
+  doc.text(loggedInName, margin + 50, yPos)
+     .text(focalName, margin + 200, yPos)
+     .text(mswName, margin + 350, yPos);
+
+  yPos += lineHeight;
+  doc.fontSize(smallFontSize * 0.9)
+     .text('Child Development Worker', margin + 50, yPos)
+     .text('ECCD Focal Person', margin + 200, yPos)
+     .text('MSWDO', margin + 350, yPos);
+
+  doc.end();
+}
+
 router.get('/export', authenticate, async (req, res) => {
   const cdcId = req.user?.cdc_id;
-  const { academic_year } = req.query;
+  const { academic_year, format = 'excel' } = req.query; // format: 'excel' or 'pdf'
   
   if (!cdcId) {
     return res.status(403).json({
@@ -443,7 +680,14 @@ router.get('/export', authenticate, async (req, res) => {
     // Add borders to all cells in the used range first
     // We'll add borders as we create cells, but also ensure empty cells in header area have borders
     
+    // Set row heights for image rows (5-8) to ensure vertical centering
+    // Make rows taller to accommodate images and center them vertically
+    for (let row = 5; row <= 8; row++) {
+      worksheet.getRow(row).height = 40; // Taller rows for images
+    }
+    
     // Add images (logos) - Row 5-8, Columns C and E (cells C5-C8 and E5-E8)
+    // Vertically center images by calculating the middle position
     try {
       const image1Path = path.join(__dirname, '..', 'image.png');
       const image2Path = path.join(__dirname, '..', 'image1.png');
@@ -454,8 +698,9 @@ router.get('/export', authenticate, async (req, res) => {
           extension: 'png',
         });
         // C5-C8: col 2 (C), rows 4-7 (5-8 in 1-indexed, but 0-indexed for ExcelJS)
+        // Position at row 5 (middle of rows 4-7) to vertically center
         worksheet.addImage(image1, {
-          tl: { col: 2, row: 4 }, // Top-left: C5
+          tl: { col: 2, row: 5 }, // Positioned at middle row for vertical centering
           ext: { width: 240, height: 160 } // image.png - keep original size
         });
       }
@@ -466,8 +711,9 @@ router.get('/export', authenticate, async (req, res) => {
           extension: 'png',
         });
         // E5-E8: col 4 (E), rows 4-7 - image1.png (enlarged)
+        // Position at row 5 (middle of rows 4-7) to vertically center
         worksheet.addImage(image2, {
-          tl: { col: 4, row: 4 }, // Top-left: E5
+          tl: { col: 4, row: 5 }, // Positioned at middle row for vertical centering
           ext: { width: 360, height: 240 } // Enlarged image1.png only
         });
       }
@@ -491,12 +737,27 @@ router.get('/export', authenticate, async (req, res) => {
       setCell(row, 5, ''); // Column E
     }
 
-    // Header rows (starting from row 5, Excel is 1-indexed)
-    setCell(5, 7, 'Republic of the Philippines', { font: { size: 14 } });
-    setCell(6, 7, `Province of ${province}`, { font: { size: 14 } });
-    setCell(7, 7, `Municipality of ${municipality}`, { font: { size: 14, bold: true } });
-    setCell(8, 7, `Email Address: ${loggedInEmail}`, { font: { size: 14, color: { argb: 'FF0000FF' }, underline: true } });
-    setCell(9, 7, `Telephone number: ${loggedInPhone}`, { font: { size: 14 } });
+    // Header rows (starting from row 5, Excel is 1-indexed) - centered
+    setCell(5, 7, 'Republic of the Philippines', { 
+      font: { size: 14 }, 
+      alignment: { horizontal: 'center', vertical: 'middle' } 
+    });
+    setCell(6, 7, `Province of ${province}`, { 
+      font: { size: 14 }, 
+      alignment: { horizontal: 'center', vertical: 'middle' } 
+    });
+    setCell(7, 7, `Municipality of ${municipality}`, { 
+      font: { size: 14, bold: true }, 
+      alignment: { horizontal: 'center', vertical: 'middle' } 
+    });
+    setCell(8, 7, `Email Address: ${loggedInEmail}`, { 
+      font: { size: 14, color: { argb: 'FF0000FF' }, underline: true }, 
+      alignment: { horizontal: 'center', vertical: 'middle' } 
+    });
+    setCell(9, 7, `Telephone number: ${loggedInPhone}`, { 
+      font: { size: 14 }, 
+      alignment: { horizontal: 'center', vertical: 'middle' } 
+    });
     
     // Empty rows
     for (let row = 10; row <= 12; row++) {
@@ -676,18 +937,45 @@ router.get('/export', authenticate, async (req, res) => {
     // Set row heights
     for (let row = 1; row <= 58; row++) {
       const rowObj = worksheet.getRow(row);
-      rowObj.height = row === 18 ? 30 : 20; // Title row is taller
+      if (row >= 5 && row <= 8) {
+        rowObj.height = 30; // Image rows
+      } else {
+        rowObj.height = row === 18 ? 30 : 20; // Title row is taller
+      }
     }
 
-    // Generate buffer and send
-    const buffer = await workbook.xlsx.writeBuffer();
+    // Generate buffer and send based on format
     const timestamp = new Date().toISOString().split('T')[0];
-    res.setHeader('Content-Type', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
-    res.setHeader(
-      'Content-Disposition',
-      `attachment; filename="cdc-students-${timestamp}.xlsx"`
-    );
-    return res.status(200).send(buffer);
+    
+    if (format === 'pdf') {
+      // Generate PDF
+      return generatePDF(res, {
+        students,
+        cdcName,
+        cdwDisplayName,
+        barangay,
+        province,
+        municipality,
+        loggedInEmail,
+        loggedInPhone,
+        loggedInName,
+        focalName,
+        mswName,
+        maleCount,
+        femaleCount,
+        totalCount,
+        timestamp
+      });
+    } else {
+      // Generate Excel
+      const buffer = await workbook.xlsx.writeBuffer();
+      res.setHeader('Content-Type', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
+      res.setHeader(
+        'Content-Disposition',
+        `attachment; filename="cdc-students-${timestamp}.xlsx"`
+      );
+      return res.status(200).send(buffer);
+    }
   } catch (err) {
     console.error('Excel export error:', err);
     return res.status(500).json({
