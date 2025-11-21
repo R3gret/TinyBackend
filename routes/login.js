@@ -69,16 +69,36 @@ router.post('/', loginLimiter, validateLogin, async (req, res) => {
       }
     };
 
+    // Get expiration from environment variable or default to 1h
+    const expiresIn = process.env.JWT_EXPIRES || '1h';
+    
     const token = jwt.sign(
       payload,
       process.env.JWT_SECRET || 'your-secret-key',
-      { expiresIn: '1h' }
+      { expiresIn }
     );
+
+    // Calculate expiresIn in seconds for response
+    // Parse the expiresIn string (e.g., "7h" = 7 hours = 25200 seconds)
+    let expiresInSeconds = 3600; // default 1 hour
+    if (expiresIn.endsWith('h')) {
+      const hours = parseInt(expiresIn);
+      expiresInSeconds = hours * 3600;
+    } else if (expiresIn.endsWith('m')) {
+      const minutes = parseInt(expiresIn);
+      expiresInSeconds = minutes * 60;
+    } else if (expiresIn.endsWith('d')) {
+      const days = parseInt(expiresIn);
+      expiresInSeconds = days * 24 * 3600;
+    } else if (!isNaN(expiresIn)) {
+      // If it's just a number, assume seconds
+      expiresInSeconds = parseInt(expiresIn);
+    }
 
     res.json({
       success: true,
       token, // Send token in response body
-      expiresIn: 3600, // 1 hour in seconds
+      expiresIn: expiresInSeconds,
       user: { 
         id: user.id, 
         username: user.username, 
