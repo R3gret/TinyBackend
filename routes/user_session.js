@@ -198,10 +198,22 @@ router.put('/update-profile', [
       });
     }
 
-    // Get user ID from body
-    const userId = req.body.userId;
+    // Get user ID from JWT token
+    const token = req.headers.authorization?.split(' ')[1];
+    if (!token) {
+      return res.status(401).json({ success: false, message: 'Unauthorized - No token provided' });
+    }
+
+    let userId;
+    try {
+      const decoded = jwt.verify(token, process.env.JWT_SECRET || 'your-secret-key');
+      userId = decoded.user?.id || decoded.id;
+    } catch (err) {
+      return res.status(401).json({ success: false, message: 'Invalid or expired token' });
+    }
+
     if (!userId) {
-      return res.status(400).json({ success: false, message: 'Missing userId in request body' });
+      return res.status(400).json({ success: false, message: 'User ID not found in token' });
     }
 
     const {
