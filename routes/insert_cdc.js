@@ -494,15 +494,15 @@ router.get('/preslist', async (req, res) => {
       connection = await db.promisePool.getConnection();
       
       // Get unassigned workers (type='worker' and cdc_id IS NULL)
-      // Note: user_other_info may not have first_name/last_name, so we use full_name
+      // Note: email is stored in user_other_info, not users table
       const [workers] = await connection.query(
         `SELECT 
           u.id,
           u.username,
-          u.email,
           u.type,
           u.cdc_id,
-          uoi.full_name
+          uoi.full_name,
+          uoi.email
         FROM users u
         LEFT JOIN user_other_info uoi ON u.id = uoi.user_id
         WHERE u.type = 'worker' 
