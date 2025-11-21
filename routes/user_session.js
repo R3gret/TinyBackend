@@ -83,6 +83,84 @@ router.get('/current-user/details', async (req, res) => {
   }
 });
 
+// Get profile data (for editing)
+router.get('/update-profile', async (req, res) => {
+  let connection;
+  try {
+    // Get user ID from query parameter
+    const userId = req.query.userId;
+
+    if (!userId) {
+      return res.status(400).json({ success: false, message: 'Missing userId in query' });
+    }
+
+    // Get connection from pool
+    connection = await db.promisePool.getConnection();
+
+    // Query database for user details
+    const query = `
+      SELECT 
+        u.*, 
+        o.full_name,
+        o.email AS contact_email,
+        o.phone,
+        o.address,
+        o.organization,
+        o.website,
+        o.social_media,
+        u.profile_pic
+      FROM users u
+      LEFT JOIN user_other_info o ON u.id = o.user_id
+      WHERE u.id = ?
+    `;
+
+    const [results] = await connection.query(query, [userId]);
+
+    if (results.length === 0) {
+      return res.status(404).json({ success: false, message: 'User not found' });
+    }
+
+    const userData = {
+      ...results[0],
+      other_info: {
+        full_name: results[0].full_name,
+        email: results[0].contact_email,
+        phone: results[0].phone,
+        address: results[0].address,
+        organization: results[0].organization,
+        website: results[0].website,
+        social_media: results[0].social_media,
+        profile_pic: results[0].profile_pic
+      }
+    };
+
+    // Clean up duplicated fields
+    [
+      'full_name', 
+      'contact_email', 
+      'phone', 
+      'address', 
+      'organization', 
+      'website', 
+      'social_media',
+      'profile_pic'
+    ].forEach(field => {
+      delete userData[field];
+    });
+
+    res.json({ success: true, user: userData });
+  } catch (err) {
+    console.error('Error:', err);
+    res.status(500).json({ 
+      success: false, 
+      message: 'Server error',
+      error: process.env.NODE_ENV === 'development' ? err.message : undefined
+    });
+  } finally {
+    if (connection) connection.release();
+  }
+});
+
 // Update profile with validation
 router.put('/update-profile', [
   body('full_name').optional().trim().isLength({ min: 2 }).withMessage('Full name must be at least 2 characters'),
