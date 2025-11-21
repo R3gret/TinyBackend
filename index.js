@@ -14,7 +14,12 @@ app.use(helmet());
 // Normalize frontend URL (remove trailing slash) so CORS matching works as expected
 const rawFrontendUrl = process.env.FRONTEND_URL || 'http://localhost:3000';
 const frontendUrl = rawFrontendUrl.replace(/\/*$/, '').trim();
-const allowedOrigins = [frontendUrl, 'http://localhost:5173', 'http://localhost:5174'];
+const allowedOrigins = [
+  frontendUrl, 
+  'http://localhost:5173', 
+  'http://localhost:5174',
+  'https://tinytrack.docmap.cloud'
+];
 
 app.use(cors({
   origin: (origin, callback) => {
