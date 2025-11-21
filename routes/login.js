@@ -6,6 +6,22 @@ const jwt = require('jsonwebtoken');
 const { body, validationResult } = require('express-validator');
 const rateLimit = require('express-rate-limit');
 
+// Debug endpoint to check JWT expiration setting (remove in production)
+router.get('/debug/jwt-expires', (req, res) => {
+  const expiresIn = process.env.JWT_EXPIRES || '1h';
+  let expiresInSeconds = 3600;
+  if (expiresIn.endsWith('h')) {
+    const hours = parseInt(expiresIn.replace('h', ''), 10);
+    expiresInSeconds = hours * 3600;
+  }
+  res.json({
+    JWT_EXPIRES: process.env.JWT_EXPIRES,
+    expiresIn: expiresIn,
+    expiresInSeconds: expiresInSeconds,
+    expiresInHours: expiresInSeconds / 3600
+  });
+});
+
 // Rate limiting with proxy awareness
 const loginLimiter = rateLimit({
   windowMs: 15 * 60 * 1000,
@@ -72,6 +88,13 @@ router.post('/', loginLimiter, validateLogin, async (req, res) => {
     // Get expiration from environment variable or default to 1h
     const expiresIn = process.env.JWT_EXPIRES || '1h';
     
+    // Log the expiration setting for debugging
+    console.log('JWT Expiration Setting:', {
+      JWT_EXPIRES: process.env.JWT_EXPIRES,
+      expiresIn: expiresIn,
+      timestamp: new Date().toISOString()
+    });
+    
     const token = jwt.sign(
       payload,
       process.env.JWT_SECRET || 'your-secret-key',
@@ -82,18 +105,24 @@ router.post('/', loginLimiter, validateLogin, async (req, res) => {
     // Parse the expiresIn string (e.g., "7h" = 7 hours = 25200 seconds)
     let expiresInSeconds = 3600; // default 1 hour
     if (expiresIn.endsWith('h')) {
-      const hours = parseInt(expiresIn);
+      const hours = parseInt(expiresIn.replace('h', ''), 10);
       expiresInSeconds = hours * 3600;
     } else if (expiresIn.endsWith('m')) {
-      const minutes = parseInt(expiresIn);
+      const minutes = parseInt(expiresIn.replace('m', ''), 10);
       expiresInSeconds = minutes * 60;
     } else if (expiresIn.endsWith('d')) {
-      const days = parseInt(expiresIn);
+      const days = parseInt(expiresIn.replace('d', ''), 10);
       expiresInSeconds = days * 24 * 3600;
     } else if (!isNaN(expiresIn)) {
       // If it's just a number, assume seconds
-      expiresInSeconds = parseInt(expiresIn);
+      expiresInSeconds = parseInt(expiresIn, 10);
     }
+    
+    console.log('Token created with expiration:', {
+      expiresIn: expiresIn,
+      expiresInSeconds: expiresInSeconds,
+      expiresInHours: expiresInSeconds / 3600
+    });
 
     res.json({
       success: true,

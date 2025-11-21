@@ -10,7 +10,7 @@ const { getAcademicYearDateRange } = require('../utils/academicYear');
 // Protect all attendance routes with auth
 router.use(authMiddleware);
 router.post('/', [
-  body('student_id').isInt().withMessage('Student ID must be an integer'),
+  body('student_id').notEmpty().withMessage('Student ID is required'),
   body('attendance_date').isISO8601().withMessage('Invalid date format (YYYY-MM-DD)'),
   body('status').isIn(['Present', 'Absent', 'Late', 'Excused']).withMessage('Invalid status')
 ], async (req, res) => {
@@ -83,9 +83,9 @@ router.post('/', [
 // Bulk insert attendance records
 router.post('/bulk', [
   body().isArray(),
-  body('*.student_id').isInt(),
-  body('*.attendance_date').isISO8601(),
-  body('*.status').isIn(['Present', 'Absent', 'Late', 'Excused'])
+  body('*.student_id').notEmpty().withMessage('Student ID is required'),
+  body('*.attendance_date').isISO8601().withMessage('Invalid date format (YYYY-MM-DD)'),
+  body('*.status').isIn(['Present', 'Absent', 'Late', 'Excused']).withMessage('Invalid status')
 ], async (req, res) => {
   const errors = validationResult(req);
   if (!errors.isEmpty()) {
