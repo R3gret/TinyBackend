@@ -15,32 +15,7 @@ const hasCdcAssociation = (req, res, next) => {
   next();
 };
 
-// Apply the middleware to all routes in this file
-router.use(hasCdcAssociation);
-
-// GET all workers for the logged-in user's CDC
-router.get('/', async (req, res) => {
-  try {
-    const { cdc_id } = req.user;
-    const { search } = req.query;
-
-    let query = 'SELECT id, username, profile_pic FROM users WHERE type = \'worker\' AND cdc_id = ?';
-    const params = [cdc_id];
-
-    if (search) {
-      query += ' AND username LIKE ?';
-      params.push(`%${search}%`);
-    }
-
-    const [workers] = await db.promisePool.query(query, params);
-
-    res.json({ success: true, data: workers });
-  } catch (error) {
-    res.status(500).json({ success: false, message: error.message });
-  }
-});
-
-// POST a new worker for the logged-in user's CDC
+// POST a new worker - does NOT require CDC association (workers are created unassigned)
 router.post('/', [
   body('username').trim().isLength({ min: 3 }).withMessage('Username must be at least 3 characters'),
   body('password').isLength({ min: 8 }).withMessage('Password must be at least 8 characters'),
@@ -66,6 +41,31 @@ router.post('/', [
     );
 
     res.status(201).json({ success: true, message: 'Worker created successfully', data: { id: result.insertId, username } });
+  } catch (error) {
+    res.status(500).json({ success: false, message: error.message });
+  }
+});
+
+// Apply the middleware to routes that require CDC association
+router.use(hasCdcAssociation);
+
+// GET all workers for the logged-in user's CDC
+router.get('/', async (req, res) => {
+  try {
+    const { cdc_id } = req.user;
+    const { search } = req.query;
+
+    let query = 'SELECT id, username, profile_pic FROM users WHERE type = \'worker\' AND cdc_id = ?';
+    const params = [cdc_id];
+
+    if (search) {
+      query += ' AND username LIKE ?';
+      params.push(`%${search}%`);
+    }
+
+    const [workers] = await db.promisePool.query(query, params);
+
+    res.json({ success: true, data: workers });
   } catch (error) {
     res.status(500).json({ success: false, message: error.message });
   }
